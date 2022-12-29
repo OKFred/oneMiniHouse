@@ -1,0 +1,62 @@
+
+/* Fred 20221129 */
+/* 子类居中 */
+.my-center {
+  display: flex; justify-content: center;
+}
+.my-center-vertically {
+  display: flex; align-items: center;
+}
+
+/* 字体 */
+.my-font {
+  font-weight: bold !important; font-family: 等线 !important;
+}
+.my-big-font {
+   font-size: 1.3rem !important;
+}
+.my-white-font {
+  color: white !important;
+}
+.my-inline-label {
+  display:inline-block; background-color: #54B736; height: 0.5rem; width: 0.5rem; margin-left: 1.5vw; margin-right: 1.5vw; border-radius: 50%;
+}
+.my-inline-text {
+  white-space: nowrap;
+}
+.my-ellipsis {
+   text-overflow: ellipsis; overflow: hidden; display: inline-block;
+}
+.my-title {
+  padding: 1.7rem 0 1rem 1rem;  font-size: 1.3rem;
+}
+.my-subtitle {
+  font-size: 1rem; color: #8C8C8C; font-weight: 700;
+}
+
+/* 对齐方式 */
+.my-even-table {
+  display: flex; justify-content: space-evenly;
+}
+.my-far-table {
+  display: flex; justify-content: space-between;
+}
+.my-around-table {
+  display: flex; justify-content: space-around;
+}
+/* 标签 */
+.my-tag {
+  display: block !important; margin-left: 0.5rem; font-size: 1rem;
+}
+
+/* 背景色 */
+.my-header-background {
+  background: linear-gradient(180deg, #07D686 0%, #07D686 40%, rgba(38,244,164,0) 100%) !important; height: 43.3%; width: 100vw; position: fixed; z-index: -1;
+}
+.my-header-background-white {
+  background-color: white !important; height: 11.75rem; width: 100vw; position: fixed; z-index: -1;
+}
+.my-underground {
+  background-color: #F5F5F5; height: 100vh; width: 100vw; position: fixed; z-index: -2;
+}
+/* Fred 20221129 */
