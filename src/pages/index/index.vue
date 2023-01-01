@@ -1,64 +1,98 @@
 <template>
   <view class="ta-header my-center">
-    <text>{{ localObj.name }}</text>
+    <text>{{ localObj.pageName }}</text>
   </view>
+  <!--
+  <myHeaderd :parentObj="localObj" /> -->
   <view class="ta-content">
-    <view class="my-center-vertically">
+    <view class="my-center-vertically" style="margin-bottom: 1.5rem">
       <input
         type="text"
         placeholder="请输入服务器地址："
-        :focus="true"
         :value="localObj.address"
-        style="margin-bottom: 1rem"
       />
-      <input
-        type="text"
-        placeholder="请输入端口号："
-        :focus="true"
-        :value="localObj.port"
-        style="margin-bottom: 1rem"
-      />
+      <input type="text" placeholder="请输入端口号：" :value="localObj.port" />
       <button
-        size="mini"
-        style="width: 30%"
+        size="default"
+        style="width: 35%"
         :type="localObj.connected ? 'primary' : 'warn'"
         :onTap="toggleConnect"
       >
         {{ localObj.connected ? "已连接" : "连接" }}
       </button>
     </view>
-    <view class="my-center-vertically">
-      <text style="padding-right: 1rem;">切换页面</text>
-      <switch :checked="localObj.showPower" :onChange="togglePage" />
-    </view>
-    <view style="width: 100%; margin-top: 1rem; border-bottom: 0.1rem solid black;" />
+    <picker
+      mode="selector"
+      :range="localObj.tabArr"
+      @change="onTabChange"
+      class="my-center-vertically"
+    >
+      <view
+        style="
+          border: 0.1rem solid orangered;
+          border-radius: 1rem;
+          padding: 1rem 0;
+          width: 90vw;
+        "
+        class="my-far-table"
+      >
+        <text style="padding: 0 1rem">当前选择：</text>
+        <text style="padding: 0 1rem">
+          {{ localObj.tabArr[localObj.currentTab] }}
+        </text>
+      </view>
+    </picker>
     <view style="margin-top: 1rem" />
-    <view style="margin-top: 1rem">查询时间：{{ localObj.queryTime }}</view>
+    <view style="margin-top: 1rem" class="my-far-table"
+      ><text>查询时间：</text><text>{{ localObj.queryTime }}</text></view
+    >
+    <view style="margin-top: 1rem; border-bottom: 0.1rem dashed royalblue" />
     <view
-      v-if="!localObj.showPower"
-      class="my-far-table"
+      v-if="localObj.tabArr[localObj.currentTab] === '光亮'"
+      class="my-far-table my-font"
+      style="margin-top: 2rem; margin-bottom: 1rem"
+      v-for="(obj, index) in localObj.formLightArr"
+      v-key="index"
+    >
+      <view style="font-weight: bold">{{ obj.label }}</view>
+      <view style="color: grey">{{ obj.value }}</view>
+    </view>
+    <view
+      v-if="localObj.tabArr[localObj.currentTab] === '温湿度'"
+      class="my-far-table my-font"
       style="margin-top: 2rem; margin-bottom: 1rem"
       v-for="(obj, index) in localObj.formHotWetArr"
       v-key="index"
     >
-      <view>{{ obj.label }}</view>
-      <view>{{ obj.value }}</view>
+      <view style="font-weight: bold">{{ obj.label }}</view>
+      <view style="color: grey">{{ obj.value }}</view>
     </view>
     <view
-      v-if="localObj.showPower"
-      class="my-far-table"
-      style="margin-bottom: 1rem"
+      v-if="localObj.tabArr[localObj.currentTab] === '电表'"
+      class="my-far-table my-font"
+      style="margin-top: 2rem; margin-bottom: 1rem"
       v-for="(obj, index) in localObj.formPowerArr"
       v-key="index"
     >
-      <view>{{ obj.label }}</view>
-      <view>{{ obj.value }}</view>
+      <view style="font-weight: bold">{{ obj.label }}</view>
+      <view style="color: grey">{{ obj.value }}</view>
+    </view>
+    <view
+      v-if="localObj.tabArr[localObj.currentTab] === '环境'"
+      class="my-far-table my-font"
+      style="margin-top: 2rem; margin-bottom: 1rem"
+      v-for="(obj, index) in localObj.formMixArr"
+      v-key="index"
+    >
+      <view style="font-weight: bold">{{ obj.label }}</view>
+      <view style="color: grey">{{ obj.value }}</view>
     </view>
   </view>
 </template>
 
 <script setup>
 //模块引入
+import Taro from "@tarojs/taro";
 import {
   reactive,
   watch,
@@ -67,34 +101,43 @@ import {
   onActivated,
   onDeactivated,
   onUpdated,
+  defineProps,
 } from "vue";
-import "./index.css";
-import Taro from "@tarojs/taro";
 import { Buffer } from "buffer";
 
 //自定义组件引入
-import taskSensor from "./taskSensor.js";
-import taskHotWet from "./taskHotWet.js";
+import sensorHotWet from "./sensorHotWet.js";
+import sensorLight from "./sensorLight.js";
+import sensorMix from "./sensorMix.js";
+import meterPower from "./meterPower.js";
+import myHeaderd from "../../components/myHeaderd/index.vue";
 
 //父系入参
 const props = defineProps({
   globalObj: Object,
 });
 
-/* voltage: '电压(V)',
-current: '电流(A)',
-active_power: '有用功率(KW)',
-reactive_power: '无用功率(Kvar)',
-apparent_power: '视在功率(KVA)',
-power_factor: '功率因数',
-frequency: '频率(Hz)',
-consumed_energy: '电能(KWh)', */
+const hotWetQueryHex = sensorHotWet.hotWetQuery();
+const mixQueryHex = sensorMix.mixQuery();
+const lightQueryHex = sensorLight.lightQuery();
+const generalQueryHex = meterPower.generalQuery();
+const energyQueryHex = meterPower.energyQuery();
 
 //本地变量和函数
 let localObj = reactive({
-  name: "智能家居",
-  address: "172.28.0.4",
+  pageName: "智能家居",
+  headerColor: "blue",
+  address: "192.168.11.1",
   port: "8899",
+  formLightArr: [
+    { label: "设备地址", value: "" },
+    { label: "功能码", value: "" },
+    { label: "读取字节数", value: "" },
+    { label: "亮度", value: "" },
+    { label: "CRC高位", value: "" },
+    { label: "CRC低位", value: "" },
+    // { label: "查询时间", value: "" },
+  ],
   formHotWetArr: [
     { label: "设备地址", value: "" },
     { label: "功能码", value: "" },
@@ -106,18 +149,39 @@ let localObj = reactive({
     // { label: "查询时间", value: "" },
   ],
   formPowerArr: [
-    { label: "电压(V)", value: "230" },
-    { label: "电流(A)", value: "230" },
-    { label: "有用功率(KW)", value: "230" },
-    { label: "无用功率(Kvar)", value: "230" },
-    { label: "视在功率(KVA)", value: "230" },
-    { label: "功率因数", value: "230" },
-    { label: "频率(Hz)", value: "230" },
-    { label: "电能(KWh)", value: "230" },
+    { label: "设备地址", value: "" },
+    { label: "电压(V)", value: "" },
+    { label: "电流(A)", value: "" },
+    { label: "有用功率(KW)", value: "" },
+    { label: "无用功率(Kvar)", value: "" },
+    { label: "视在功率(KVA)", value: "" },
+    { label: "功率因数", value: "" },
+    { label: "频率(Hz)", value: "" },
+    { label: "电能(KWh)", value: "" },
+  ],
+  formMixArr: [
+    { label: "设备地址", value: "" },
+    { label: "功能码", value: "" },
+    { label: "读取字节数", value: "" },
+    { label: "温度", value: "" },
+    { label: "湿度", value: "" },
+    { label: "PM 1", value: "" },
+    { label: "PM 2.5", value: "" },
+    { label: "PM 10", value: "" },
+    { label: "二氧化碳", value: "" },
+    { label: "氧气", value: "" },
+    { label: "甲醛", value: "" },
+    { label: "CRC高位", value: "" },
+    { label: "CRC低位", value: "" },
+    // { label: "查询时间", value: "" },
   ],
   connected: false,
   socket: null,
   showPower: false,
+  tabArr: ["请选择", "光亮", "温湿度", "电表", "环境"],
+  currentTab: "0",
+  queryArr: ["", lightQueryHex, hotWetQueryHex, generalQueryHex, mixQueryHex],
+  currentQuery: "",
 });
 /*
 watch(
@@ -133,9 +197,11 @@ function setTitle() {
   Taro.setNavigationBarTitle({ title });
 }
 
-function togglePage() {
-  localObj.showPower = !localObj.showPower;
-  console.log("切换页面", localObj.showPower);
+function onTabChange(e) {
+  let { value } = e.detail;
+  localObj.currentTab = value;
+  localObj.currentQuery = localObj.queryArr[value];
+  console.log("切换页面");
 }
 
 let intervalTask;
@@ -147,6 +213,9 @@ function toggleConnect() {
     localObj.connected = false;
     console.log("已断开");
   } else {
+    if (!localObj.currentQuery) {
+      return globalThis.queryResult(false, "请先选择");
+    }
     onTCPConnect({ address, port });
   }
 } //连接服务器
@@ -157,9 +226,13 @@ let authTasks = (socket) => {
   console.log("开启轮询");
   intervalTask = setInterval(() => {
     if (localObj.connected) {
-      onTCPMessage(socket, "010400010002200b"); //发送问询数据
+      onTCPMessage(socket, localObj.currentQuery); //发送问询数据
+      if (localObj.currentQuery === generalQueryHex) {
+        // console.log("同时查询电能");
+        setTimeout(() => onTCPMessage(socket, energyQueryHex), 1000);
+      }
     }
-  }, 1000);
+  }, 2000);
 };
 
 let farewellTasks = (socket) => {
@@ -226,9 +299,11 @@ async function onTCPConnect({ address, port }) {
   socket.onMessage((e) => {
     console.log("收到数据", e);
     let { message, remoteInfo, localInfo, size } = e;
-    /* if (size===9)  */return dataReader(buf2hex(message)); //体验版似乎计算不了长度，暂时作罢
-    let finalData = wx.decode({ data: message, format: 'utf8' }); //不要用new TextDecoder，因为手机端不兼容T_T
-    console.log(finalData)
+    /* if (size===9)  */ return dataReader(buf2hex(message)); //体验版似乎计算不了长度，暂时作罢
+    let decoder = new TextDecoder();
+    console.log(decoder.decode(message));
+    let finalData = wx.decode({ data: message, format: "utf8" }); //不要用new TextDecoder，因为手机端不兼容T_T
+    console.log(finalData);
     if (finalData === `Port already in use\r\n`) {
       globalThis.queryResult(false, "端口已被占用，请等待他人释放");
       return;
@@ -236,9 +311,16 @@ async function onTCPConnect({ address, port }) {
   }); //接收数据
 }
 
-//然后应该会回复16进制数据，如：010404012000E0FA3A
+function buf2hex(buffer) {
+  // buffer is an ArrayBuffer
+  return [...new Uint8Array(buffer)]
+    .map((x) => x.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 function dataReader(hex) {
   let device_address = hex.substring(0, 2);
+  let byte_read = hex.substring(4, 6);
   if (device_address === "01") {
     let {
       device_address,
@@ -249,36 +331,119 @@ function dataReader(hex) {
       crc_byte_high,
       crc_byte_low,
       query_time,
-    } = taskHotWet.tempHumidSensorReader(hex) || {};
-    localObj.formHotWetArr.find((obj) => obj.label === "设备地址").value = device_address;
-    localObj.formHotWetArr.find((obj) => obj.label === "功能码").value = function_code;
-    localObj.formHotWetArr.find((obj) => obj.label === "读取字节数").value = byte_read;
-    localObj.formHotWetArr.find((obj) => obj.label === "温度").value = tempature;
+    } = sensorHotWet.hotWetReader(hex);
+    localObj.formHotWetArr.find((obj) => obj.label === "设备地址").value =
+      device_address;
+    localObj.formHotWetArr.find((obj) => obj.label === "功能码").value =
+      function_code;
+    localObj.formHotWetArr.find((obj) => obj.label === "读取字节数").value =
+      byte_read;
+    localObj.formHotWetArr.find((obj) => obj.label === "温度").value =
+      tempature;
     localObj.formHotWetArr.find((obj) => obj.label === "湿度").value = humidity;
-    localObj.formHotWetArr.find((obj) => obj.label === "CRC高位").value = crc_byte_high;
-    localObj.formHotWetArr.find((obj) => obj.label === "CRC低位").value = crc_byte_low;
+    localObj.formHotWetArr.find((obj) => obj.label === "CRC高位").value =
+      crc_byte_high;
+    localObj.formHotWetArr.find((obj) => obj.label === "CRC低位").value =
+      crc_byte_low;
     localObj.queryTime = new Date(query_time).toLocaleString();
-    // localObj.formHotWetArr.find((obj) => obj.label === "查询时间").value = query_time;
     return;
-  }
-  // 根据设备地址做对应的数据解读；
+  } else if (device_address === "21") {
+    let {
+      device_address,
+      function_code,
+      byte_read,
+      lightness,
+      crc_byte_high,
+      crc_byte_low,
+      query_time,
+    } = sensorLight.lightReader(hex);
+    localObj.formLightArr.find((obj) => obj.label === "设备地址").value =
+      device_address;
+    localObj.formLightArr.find((obj) => obj.label === "功能码").value =
+      function_code;
+    localObj.formLightArr.find((obj) => obj.label === "读取字节数").value =
+      byte_read;
+    localObj.formLightArr.find((obj) => obj.label === "亮度").value = lightness;
+    localObj.formLightArr.find((obj) => obj.label === "CRC高位").value =
+      crc_byte_high;
+    localObj.formLightArr.find((obj) => obj.label === "CRC低位").value =
+      crc_byte_low;
+    localObj.queryTime = new Date(query_time).toLocaleString();
+    return;
+  } else if (device_address === "22") return sensorMix.mixReader(hex);
+  else if (device_address === "58") {
+    if (byte_read === "20" && hex.length === 74) {
+      let {
+        device_address,
+        function_code,
+        byte_read,
+        voltage,
+        current,
+        active_power,
+        reactive_power,
+        apparent_power,
+        power_factor,
+        frequency,
+        crc_byte_high,
+        crc_byte_low,
+        query_time,
+      } = meterPower.generalReader(hex);
+      localObj.formPowerArr.find((obj) => obj.label === "设备地址").value =
+        device_address;
+      /*  localObj.formPowerArr.find((obj) => obj.label === "功能码").value =
+        function_code;
+      localObj.formPowerArr.find((obj) => obj.label === "读取字节数").value =
+        byte_read; */
+      localObj.formPowerArr.find((obj) => obj.label === "电压(V)").value =
+        voltage;
+      localObj.formPowerArr.find((obj) => obj.label === "电流(A)").value =
+        current;
+      localObj.formPowerArr.find((obj) => obj.label === "有用功率(KW)").value =
+        active_power;
+      localObj.formPowerArr.find(
+        (obj) => obj.label === "无用功率(Kvar)"
+      ).value = reactive_power;
+      localObj.formPowerArr.find((obj) => obj.label === "视在功率(KVA)").value =
+        apparent_power;
+      localObj.formPowerArr.find((obj) => obj.label === "功率因数").value =
+        power_factor;
+      localObj.formPowerArr.find((obj) => obj.label === "频率(Hz)").value =
+        frequency;
+      /* localObj.formPowerArr.find((obj) => obj.label === "CRC高位").value =
+        crc_byte_high;
+      localObj.formPowerArr.find((obj) => obj.label === "CRC低位").value =
+        crc_byte_low; */
+      localObj.queryTime = new Date(query_time).toLocaleString();
+      return;
+    } else if (byte_read === "04" && hex.length === 18) {
+      let { energy, query_time } = meterPower.energyReader(hex);
+      /* localObj.formPowerArr.find((obj) => obj.label === "设备地址").value =
+        device_address;
+      localObj.formPowerArr.find((obj) => obj.label === "功能码").value =
+        function_code;
+      localObj.formPowerArr.find((obj) => obj.label === "读取字节数").value =
+        byte_read; */
+      localObj.formPowerArr.find((obj) => obj.label === "电能(KWh)").value =
+        energy;
+      /* localObj.formPowerArr.find((obj) => obj.label === "CRC高位").value =
+        crc_byte_high;
+      localObj.formPowerArr.find((obj) => obj.label === "CRC低位").value =
+        crc_byte_low; */
+      localObj.queryTime = new Date(query_time).toLocaleString();
+      return;
+    }
+  } else console.log("未知设备", hex);
+  // 根据设备地址做对应的数据&返回的字节数去解读；
 }
-
-function buf2hex(buffer) { // buffer is an ArrayBuffer
-  return [...new Uint8Array(buffer)]
-      .map(x => x.toString(16).padStart(2, '0'))
-      .join('');
-}
-
-onUpdated(() => {
-  // console.log("login: onUpdated");
-});
-onMounted(() => {
-  console.log("login: onMounted");
-  setTitle();
-  //queryConfig() //查询配置
-});
-onActivated(() => {
-  console.log("login: onActivated");
-}); //已登录的话清除下登录信息
 </script>
+
+<style>
+.ta-header {
+  margin-top: 3rem;
+  margin-bottom: 1rem;
+}
+.ta-content {
+  margin-top: 2rem;
+  padding: 1rem;
+}
+</style>
