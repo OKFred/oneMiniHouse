@@ -1,0 +1,4 @@
+<!-- 一个主要的操作按钮，用于登录提交返回等场景 -->
+<van-button custom-class="my-botton my-center {{ color === 'orange' ? 'my-orange-button' : color === 'blue-plain' ? 'my-blue-plain' : color === 'red-plain' ? 'my-red-plain' : 'my-blue-button' }} {{ size === 'small' ? 'my-small-button' :size === 'small' ? 'my-small-button' :size === 'medium' ? 'my-medium-button' : 'my-large-button' }}" block  round="{{ shape !== 'square' }}"  icon="{{ icon }}" disabled="{{ disabled }}">
+  <text>{{ text }}</text>
+</van-button>

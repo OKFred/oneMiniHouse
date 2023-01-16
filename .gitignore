@@ -5,3 +5,6 @@ deploy_versions/
 node_modules/
 .DS_Store
 package-lock.json
+project.private.config.json
+src/project.private.config.json
+src/components/vant-weapp/

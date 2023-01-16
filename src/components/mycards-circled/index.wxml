@@ -1,0 +1,9 @@
+<view class="my-center my-center-vertically" style="flex-direction: column; padding: 6rem 20% 0 20%;">
+  <view class="my-center my-center-vertically my-font my-botton-circled">
+    <view class="my-center my-center-vertically my-around-table" style="flex-direction: column; height: 5rem;" bind:tap="onCheck">
+      <view style="font-size: 1.5rem">{{ checkType }}</view>
+      <view style="font-size: 1.1rem; color: #CDE2FC;">{{ thisTime }}</view>
+    </view>
+  </view>
+  <view style="padding: 1.5rem;" class="my-subtitle">{{ thisDate }}</view>
+</view>

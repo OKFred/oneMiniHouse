@@ -1,0 +1,5 @@
+/* 底部 */
+.my-footer {
+  position: fixed; bottom: 0rem; width: 100%; background-color: white; padding: 1rem 0;
+  border-top: 0.1rem solid #E6E6E8;  box-shadow:  0 0 0.1rem 0.1rem #EEEEEE; z-index: 5;
+}

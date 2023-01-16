@@ -1,0 +1,5 @@
+<!-- https://vant-contrib.gitee.io/vant-weapp/#/toast#dai-ma-yan-shi -->
+<template name="frame">
+  <van-toast id="van-toast" style="z-index: 9999" />
+  <van-dialog id="van-dialog"style="z-index: 9999" />
+</template>

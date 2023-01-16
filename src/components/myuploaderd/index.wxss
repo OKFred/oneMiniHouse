@@ -1,0 +1,4 @@
+
+.my-uploader-image {
+  border-radius: 0.5rem; width: 109px; height: 100px;
+}

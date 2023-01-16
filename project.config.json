@@ -4,6 +4,13 @@
   "description": "miniHouse",
   "appid": "wxa98cbd791e541e62",
   "setting": {
+    "packNpmManually": true,
+    "packNpmRelationList": [
+      {
+        "packageJsonPath": "./package.json",
+        "miniprogramNpmDistDir": "./"
+      }
+    ],
     "urlCheck": true,
     "es6": false,
     "enhance": false,
@@ -14,18 +21,21 @@
       "ignore": [],
       "disablePlugins": [],
       "outputPath": ""
-    }
+    },
+    "minifyWXSS": false,
+    "minifyWXML": false,
+    "ignoreUploadUnusedFiles": false
   },
   "compileType": "miniprogram",
-  "libVersion": "2.29.0",
   "srcMiniprogramRoot": "dist/",
-  "packOptions": {
-    "ignore": [],
-    "include": []
-  },
   "condition": {},
   "editorSetting": {
     "tabIndent": "insertSpaces",
     "tabSize": 2
-  }
+  },
+  "packOptions": {
+    "ignore": [],
+    "include": []
+  },
+  "libVersion": "2.29.0"
 }

@@ -1,0 +1,6 @@
+.my-menu {
+  display: flex; flex-direction: column;  border-radius: 1rem; background-color: white; font-size: 1.2rem; box-shadow:  0.1rem 0.2rem 0.1rem 0.1rem #EFEEF3; height: 8rem;
+}
+.my-col-3 {
+  margin-top: 1.8rem; display:grid; grid-gap: 0.7rem; grid-template-columns: repeat(3, 1fr);
+}

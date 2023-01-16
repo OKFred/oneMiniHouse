@@ -1,97 +1,20 @@
 <template>
-  <view class="ta-header my-center">
-    <text>{{ localObj.pageName }}</text>
-  </view>
-  <!--
-  <myHeaderd :parentObj="localObj" /> -->
-  <view class="ta-content">
-    <view class="my-center-vertically" style="margin-bottom: 1.5rem">
-      <input
-        type="text"
-        placeholder="请输入服务器地址："
-        :value="localObj.address"
-      />
-      <input type="text" placeholder="请输入端口号：" :value="localObj.port" />
-      <button
-        size="default"
-        style="width: 35%"
-        :type="localObj.connected ? 'primary' : 'warn'"
-        :onTap="toggleConnect"
-      >
-        {{ localObj.connected ? "已连接" : "连接" }}
-      </button>
-    </view>
-    <picker
-      mode="selector"
-      :range="localObj.tabArr"
-      @change="onTabChange"
-      class="my-center-vertically"
-    >
-      <view
-        style="
-          border: 0.1rem solid orangered;
-          border-radius: 1rem;
-          padding: 1rem 0;
-          width: 90vw;
-        "
-        class="my-far-table"
-      >
-        <text style="padding: 0 1rem">当前选择：</text>
-        <text style="padding: 0 1rem">
-          {{ localObj.tabArr[localObj.currentTab] }}
-        </text>
+  <mytaro />
+  <myHeaderd :parentObj="localObj" />
+  <view class="my-underground" />
+  <mycontents>
+    <slot-view :name="'myContentSlot'" style="margin: 6rem 0">
+      <view style="margin-top: 1rem" />
+      <view class="my-center">
+        <!-- <image :src="banner" style="height: 140px; width: 343px" mode="widthFix" /> -->
       </view>
-    </picker>
-    <view style="margin-top: 1rem" />
-    <view style="margin-top: 1rem" class="my-far-table"
-      ><text>查询时间：</text><text>{{ localObj.queryTime }}</text></view
-    >
-    <view style="margin-top: 1rem; border-bottom: 0.1rem dashed royalblue" />
-    <view
-      v-if="localObj.tabArr[localObj.currentTab] === '光亮'"
-      class="my-far-table my-font"
-      style="margin-top: 2rem; margin-bottom: 1rem"
-      v-for="(obj, index) in localObj.formLightArr"
-      v-key="index"
-    >
-      <view style="font-weight: bold">{{ obj.label }}</view>
-      <view style="color: grey">{{ obj.value }}</view>
-    </view>
-    <view
-      v-if="localObj.tabArr[localObj.currentTab] === '温湿度'"
-      class="my-far-table my-font"
-      style="margin-top: 2rem; margin-bottom: 1rem"
-      v-for="(obj, index) in localObj.formHotWetArr"
-      v-key="index"
-    >
-      <view style="font-weight: bold">{{ obj.label }}</view>
-      <view style="color: grey">{{ obj.value }}</view>
-    </view>
-    <view
-      v-if="localObj.tabArr[localObj.currentTab] === '电表'"
-      class="my-far-table my-font"
-      style="margin-top: 2rem; margin-bottom: 1rem"
-      v-for="(obj, index) in localObj.formPowerArr"
-      v-key="index"
-    >
-      <view style="font-weight: bold">{{ obj.label }}</view>
-      <view style="color: grey">{{ obj.value }}</view>
-    </view>
-    <view
-      v-if="localObj.tabArr[localObj.currentTab] === '环境'"
-      class="my-far-table my-font"
-      style="margin-top: 2rem; margin-bottom: 1rem"
-      v-for="(obj, index) in localObj.formMixArr"
-      v-key="index"
-    >
-      <view style="font-weight: bold">{{ obj.label }}</view>
-      <view style="color: grey">{{ obj.value }}</view>
-    </view>
-  </view>
+      <theMenu :localObj="localObj" />
+    </slot-view>
+  </mycontents>
 </template>
 
 <script setup>
-//模块引入
+//框架引入
 import Taro from "@tarojs/taro";
 import {
   reactive,
@@ -103,347 +26,53 @@ import {
   onUpdated,
   defineProps,
 } from "vue";
-import { Buffer } from "buffer";
 
-//自定义组件引入
-import sensorHotWet from "./sensorHotWet.js";
-import sensorLight from "./sensorLight.js";
-import sensorMix from "./sensorMix.js";
-import meterPower from "./meterPower.js";
-import myHeaderd from "../../components/myHeaderd/index.vue";
+//组件引入
+import mytaro from "@/src/components/mytaro/index.vue" //公共页面配置
+import myHeaderd from "@/src/components/myheaderd/index.vue"; //引入公共组件
+import theMenu from "./components/theMenu.vue" //引入自定义组件
+// import banner from "@/src/assets/banner.png"; //引入图片
+
+definePageConfig({
+  navigationStyle: "custom",
+  enableShareTimeline: true,
+  enableShareAppMessage: true,
+  usingComponents: {
+    mycontents: "@/src/components/mycontents/index",
+  },
+});
 
 //父系入参
+const { onNav, onNavBack } = globalThis.app;
+
 const props = defineProps({
   globalObj: Object,
 });
 
-const hotWetQueryHex = sensorHotWet.hotWetQuery();
-const mixQueryHex = sensorMix.mixQuery();
-const lightQueryHex = sensorLight.lightQuery();
-const generalQueryHex = meterPower.generalQuery();
-const energyQueryHex = meterPower.energyQuery();
+onMounted(() => {
+  globalThis.app.changeTab({ tabName: "首页" });
+  // fetchData()
+});
+
+function setData(obj = {}) {
+  Object.assign(localObj, obj);
+  return localObj;
+} //微信setData替代品
 
 //本地变量和函数
 let localObj = reactive({
-  pageName: "智能家居",
-  headerColor: "blue",
-  address: "192.168.11.1",
-  port: "8899",
-  formLightArr: [
-    { label: "设备地址", value: "" },
-    { label: "功能码", value: "" },
-    { label: "读取字节数", value: "" },
-    { label: "亮度", value: "" },
-    { label: "CRC高位", value: "" },
-    { label: "CRC低位", value: "" },
-    // { label: "查询时间", value: "" },
-  ],
-  formHotWetArr: [
-    { label: "设备地址", value: "" },
-    { label: "功能码", value: "" },
-    { label: "读取字节数", value: "" },
-    { label: "温度", value: "" },
-    { label: "湿度", value: "" },
-    { label: "CRC高位", value: "" },
-    { label: "CRC低位", value: "" },
-    // { label: "查询时间", value: "" },
-  ],
-  formPowerArr: [
-    { label: "设备地址", value: "" },
-    { label: "电压(V)", value: "" },
-    { label: "电流(A)", value: "" },
-    { label: "有用功率(KW)", value: "" },
-    { label: "无用功率(Kvar)", value: "" },
-    { label: "视在功率(KVA)", value: "" },
-    { label: "功率因数", value: "" },
-    { label: "频率(Hz)", value: "" },
-    { label: "电能(KWh)", value: "" },
-  ],
-  formMixArr: [
-    { label: "设备地址", value: "" },
-    { label: "功能码", value: "" },
-    { label: "读取字节数", value: "" },
-    { label: "温度", value: "" },
-    { label: "湿度", value: "" },
-    { label: "PM 1", value: "" },
-    { label: "PM 2.5", value: "" },
-    { label: "PM 10", value: "" },
-    { label: "二氧化碳", value: "" },
-    { label: "氧气", value: "" },
-    { label: "甲醛", value: "" },
-    { label: "CRC高位", value: "" },
-    { label: "CRC低位", value: "" },
-    // { label: "查询时间", value: "" },
-  ],
-  connected: false,
-  socket: null,
-  showPower: false,
-  tabArr: ["请选择", "光亮", "温湿度", "电表", "环境"],
-  currentTab: "0",
-  queryArr: ["", lightQueryHex, hotWetQueryHex, generalQueryHex, mixQueryHex],
-  currentQuery: "",
+  pageName: "首页",
+  headerColor: "white",
+  // showBackButton: true,
 });
-/*
-watch(
-    () => props.globalObj.msgs[localObj.name],
-    (newValue, oldValue) => {
-        if (newValue) distribute(newValue)
-    },
-    { immediate: true },
-) //处理来自App.vue的消息分发 */
 
-function setTitle() {
-  const title = "小程序";
-  Taro.setNavigationBarTitle({ title });
-}
-
-function onTabChange(e) {
-  let { value } = e.detail;
-  localObj.currentTab = value;
-  localObj.currentQuery = localObj.queryArr[value];
-  console.log("切换页面");
-}
-
-let intervalTask;
-function toggleConnect() {
-  let { address, port } = localObj;
-  console.log("目标服务器", address, port);
-  if (localObj.connected) {
-    clearInterval(intervalTask);
-    localObj.connected = false;
-    console.log("已断开");
-  } else {
-    if (!localObj.currentQuery) {
-      return globalThis.queryResult(false, "请先选择");
-    }
-    onTCPConnect({ address, port });
-  }
-} //连接服务器
-
-let authTasks = (socket) => {
-  // console.log("进行认证");
-  // socket.write("hello there!");
-  console.log("开启轮询");
-  intervalTask = setInterval(() => {
-    if (localObj.connected) {
-      onTCPMessage(socket, localObj.currentQuery); //发送问询数据
-      if (localObj.currentQuery === generalQueryHex) {
-        // console.log("同时查询电能");
-        setTimeout(() => onTCPMessage(socket, energyQueryHex), 1000);
-      }
-    }
-  }, 2000);
-};
-
-let farewellTasks = (socket) => {
-  console.log("再见了咯");
-  socket.write("see you later!");
-};
-
-/*
-function dataReader(data) {
-  let { socket }=localObj;
-  let enc = new TextDecoder("utf-8");
-  let finalData = enc.decode(data);
-  console.log(finalData, finalData.length, socket);
-  if (finalData === "approved!") {
-    console.log("开启轮询");
-    intervalTask = setInterval(() => {
-      if (localObj.connected) {
-        onTCPMessage(socket, "580320000010430F");
-      }
-    }, 1000);
-  } else if (finalData === "denied!") {
-    socket.close();
-    socket = null;
-  }
-  if (finalData.length === 20) {
-    localObj.queryTime = new Date(finalData).toLocaleString();
-  }
-  if (!localObj.connected) {
-    socket.close();
-    socket = null;
-  }
-  // else
-  return;
-} */
-
-function onTCPMessage(socket, hex) {
-  let hexArr = [];
-  for (let i = 0; i < hex.length; i = i + 2) {
-    hexArr.push("0x" + hex.substring(i, i + 2));
-  }
-  // console.log(hexArr);
-  let buffer = Buffer.from(hexArr); //将数组放到buffer
-  // console.log(buffer);
-  socket.write(buffer);
-} //发送数据
-
-async function onTCPConnect({ address, port }) {
-  console.log("进行tcp连接");
-  let socket = localObj.socket ? localObj.socket : Taro.createTCPSocket();
-  socket.connect({ address, port });
-  localObj.socket = socket;
-  socket.onConnect((e) => {
-    console.log(new Date().toLocaleTimeString() + "已连接");
-    localObj.connected = true;
-    authTasks(socket); //握手
-  });
-
-  socket.onClose((e) => {
-    console.log(new Date().toLocaleTimeString() + "已断开");
-    localObj.connected = false;
-    farewellTasks(socket); //挥手
-  });
-
-  socket.onMessage((e) => {
-    console.log("收到数据", e);
-    let { message, remoteInfo, localInfo, size } = e;
-    /* if (size===9)  */ return dataReader(buf2hex(message)); //体验版似乎计算不了长度，暂时作罢
-    let decoder = new TextDecoder();
-    console.log(decoder.decode(message));
-    let finalData = wx.decode({ data: message, format: "utf8" }); //不要用new TextDecoder，因为手机端不兼容T_T
-    console.log(finalData);
-    if (finalData === `Port already in use\r\n`) {
-      globalThis.queryResult(false, "端口已被占用，请等待他人释放");
-      return;
-    }
-  }); //接收数据
-}
-
-function buf2hex(buffer) {
-  // buffer is an ArrayBuffer
-  return [...new Uint8Array(buffer)]
-    .map((x) => x.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-function dataReader(hex) {
-  let device_address = hex.substring(0, 2);
-  let byte_read = hex.substring(4, 6);
-  if (device_address === "01") {
-    let {
-      device_address,
-      function_code,
-      byte_read,
-      tempature,
-      humidity,
-      crc_byte_high,
-      crc_byte_low,
-      query_time,
-    } = sensorHotWet.hotWetReader(hex);
-    localObj.formHotWetArr.find((obj) => obj.label === "设备地址").value =
-      device_address;
-    localObj.formHotWetArr.find((obj) => obj.label === "功能码").value =
-      function_code;
-    localObj.formHotWetArr.find((obj) => obj.label === "读取字节数").value =
-      byte_read;
-    localObj.formHotWetArr.find((obj) => obj.label === "温度").value =
-      tempature;
-    localObj.formHotWetArr.find((obj) => obj.label === "湿度").value = humidity;
-    localObj.formHotWetArr.find((obj) => obj.label === "CRC高位").value =
-      crc_byte_high;
-    localObj.formHotWetArr.find((obj) => obj.label === "CRC低位").value =
-      crc_byte_low;
-    localObj.queryTime = new Date(query_time).toLocaleString();
-    return;
-  } else if (device_address === "21") {
-    let {
-      device_address,
-      function_code,
-      byte_read,
-      lightness,
-      crc_byte_high,
-      crc_byte_low,
-      query_time,
-    } = sensorLight.lightReader(hex);
-    localObj.formLightArr.find((obj) => obj.label === "设备地址").value =
-      device_address;
-    localObj.formLightArr.find((obj) => obj.label === "功能码").value =
-      function_code;
-    localObj.formLightArr.find((obj) => obj.label === "读取字节数").value =
-      byte_read;
-    localObj.formLightArr.find((obj) => obj.label === "亮度").value = lightness;
-    localObj.formLightArr.find((obj) => obj.label === "CRC高位").value =
-      crc_byte_high;
-    localObj.formLightArr.find((obj) => obj.label === "CRC低位").value =
-      crc_byte_low;
-    localObj.queryTime = new Date(query_time).toLocaleString();
-    return;
-  } else if (device_address === "22") return sensorMix.mixReader(hex);
-  else if (device_address === "58") {
-    if (byte_read === "20" && hex.length === 74) {
-      let {
-        device_address,
-        function_code,
-        byte_read,
-        voltage,
-        current,
-        active_power,
-        reactive_power,
-        apparent_power,
-        power_factor,
-        frequency,
-        crc_byte_high,
-        crc_byte_low,
-        query_time,
-      } = meterPower.generalReader(hex);
-      localObj.formPowerArr.find((obj) => obj.label === "设备地址").value =
-        device_address;
-      /*  localObj.formPowerArr.find((obj) => obj.label === "功能码").value =
-        function_code;
-      localObj.formPowerArr.find((obj) => obj.label === "读取字节数").value =
-        byte_read; */
-      localObj.formPowerArr.find((obj) => obj.label === "电压(V)").value =
-        voltage;
-      localObj.formPowerArr.find((obj) => obj.label === "电流(A)").value =
-        current;
-      localObj.formPowerArr.find((obj) => obj.label === "有用功率(KW)").value =
-        active_power;
-      localObj.formPowerArr.find(
-        (obj) => obj.label === "无用功率(Kvar)"
-      ).value = reactive_power;
-      localObj.formPowerArr.find((obj) => obj.label === "视在功率(KVA)").value =
-        apparent_power;
-      localObj.formPowerArr.find((obj) => obj.label === "功率因数").value =
-        power_factor;
-      localObj.formPowerArr.find((obj) => obj.label === "频率(Hz)").value =
-        frequency;
-      /* localObj.formPowerArr.find((obj) => obj.label === "CRC高位").value =
-        crc_byte_high;
-      localObj.formPowerArr.find((obj) => obj.label === "CRC低位").value =
-        crc_byte_low; */
-      localObj.queryTime = new Date(query_time).toLocaleString();
-      return;
-    } else if (byte_read === "04" && hex.length === 18) {
-      let { energy, query_time } = meterPower.energyReader(hex);
-      /* localObj.formPowerArr.find((obj) => obj.label === "设备地址").value =
-        device_address;
-      localObj.formPowerArr.find((obj) => obj.label === "功能码").value =
-        function_code;
-      localObj.formPowerArr.find((obj) => obj.label === "读取字节数").value =
-        byte_read; */
-      localObj.formPowerArr.find((obj) => obj.label === "电能(KWh)").value =
-        energy;
-      /* localObj.formPowerArr.find((obj) => obj.label === "CRC高位").value =
-        crc_byte_high;
-      localObj.formPowerArr.find((obj) => obj.label === "CRC低位").value =
-        crc_byte_low; */
-      localObj.queryTime = new Date(query_time).toLocaleString();
-      return;
-    }
-  } else console.log("未知设备", hex);
-  // 根据设备地址做对应的数据&返回的字节数去解读；
+async function fetchData() {
+  let queryObj = globalThis.prepareMsg("保存前端日志");
+  let queryMsg = await doFetch(queryObj);
+  console.log(queryMsg);
 }
 </script>
 
 <style>
-.ta-header {
-  margin-top: 3rem;
-  margin-bottom: 1rem;
-}
-.ta-content {
-  margin-top: 2rem;
-  padding: 1rem;
-}
+
 </style>

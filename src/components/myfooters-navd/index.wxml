@@ -1,0 +1,9 @@
+<myfooters wx:if="{{ footerArr && footerArr.length }}">
+  <view slot="myFooterSlot" wx:for="{{ footerArr }}" data-obj="{{ item }}" wx:key="index" class="my-center-vertically" style="width: 100%;flex-direction: column;" bind:tap="onNav">
+    <image hidden="{{ !item.active || !item.src[0] }}" style="height: 40px;" src="{{ item.src[0] }}" mode="heightFix" />
+    <image hidden="{{ item.active || !item.src[1] }}" style="height: 40px;" src="{{ item.src[1] }}" mode="heightFix" />
+    <view class="my-font" style="margin-top: 0.2rem; color:{{ item.active ? '#4496F9' : '#BDD2EC' }}">
+      {{ item.label }}
+    </view>
+  </view>
+</myfooters>

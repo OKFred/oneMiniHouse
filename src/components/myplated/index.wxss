@@ -1,0 +1,192 @@
+/* 车牌 */
+
+.page {
+  background: #fff;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 100%;
+}
+
+.weui-cells__title {
+  margin-top: 0.77em;
+  margin-bottom: 0.3em;
+  padding-left: 15px;
+  padding-right: 15px;
+  color: #999;
+  font-size: 14px;
+
+}
+
+/* 虚拟键盘 */
+.keyboard {
+  height: auto;
+  background: #d1d5d9;
+  position: fixed;
+  bottom: 174px;
+  width: 100%;
+  left: 0;
+  z-index: 10000000000;
+}
+
+.keyboard-item {
+  padding: 10px 0 5px 0;
+  position: relative;
+  display: block;
+}
+
+/* 关闭虚拟键盘 */
+.keyboardClose {
+  height: 70px;
+  background-color: #f7f7f7;
+  overflow: hidden;
+}
+
+.keyboardClose_btn {
+  float: right;
+  line-height: 70px;
+  font-size: 30px;
+  padding-right: 30px;
+}
+
+/* 虚拟键盘-省缩写 */
+
+/* 虚拟键盘-行 */
+.keyboard-line {
+  margin: 0 auto;
+  text-align: left;
+}
+
+.iscarnumber .keyboard-line {
+  text-align: left;
+  margin-left: 5px;
+}
+
+/* 虚拟键盘-单个按钮 */
+.keyboard-btn {
+  font-size: 34px;
+  color: #333333;
+  background: #fff;
+  display: inline-block;
+  padding: 18px 0;
+  width: 63px;
+  text-align: center;
+  box-shadow: 0 2px 0 0 #999999;
+  border-radius: 10px;
+  margin: 5px 6px;
+}
+
+.keyboard-big-btn {
+  font-size: 56px;
+  padding: 36px 0;
+  width: 163px;
+}
+
+/* 虚拟键盘-删除按钮 */
+.keyboard-del {
+  height: 60px;
+  line-height: 60px;
+  font-size: 34px;
+  color: #333333;
+  background: #A7B0BC;
+  display: inline-block;
+  padding: 4px 20px;
+  box-shadow: 0 2px 0 0 #999999;
+  border-radius: 10px;
+  margin: 5px;
+  position: absolute;
+  bottom: 5px;
+  right: 6px;
+}
+
+.keyboard-del-font {
+  font-size: 25px;
+}
+
+/* 车牌号码 */
+.carNumber-items {
+  text-align: left;
+  display: flex;
+}
+
+.carNumber-items-box {
+  display: flex;
+  width: 140px;
+  height: 70px;
+  border: 2px solid #CCCCCC;
+  border-radius: 4px;
+  /* display: inline-block;
+  vertical-align: middle; */
+  position: relative;
+  margin-right: 30px;
+}
+
+.carNumber-items-box-list {
+  width: 70px;
+  height: 70px;
+  line-height: 70px;
+  text-align: center;
+  display: inline-block;
+  font-size: 36px;
+  /* margin:10px 0; */
+  vertical-align: middle;
+}
+
+.carNumber-items-province {
+  border-right: 1px solid #ccc;
+}
+
+.carNumber-items-box::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  position: absolute;
+  right: -22px;
+  top: 40px;
+  border-radius: 50%;
+  background-color: #ccc;
+}
+
+.carNumber-item {
+  width: 70px;
+  height: 70px;
+  font-size: 36px;
+  text-align: center;
+  border: 2px solid #CCCCCC;
+  border-radius: 4px;
+  line-height: 70px;
+  display: inline-block;
+  margin: 0 4px;
+  vertical-align: middle;
+}
+
+/* 新能源 */
+.carNumber-item-newpower {
+  border: 2px dashed #A8BFF3;
+  background-color: #F6F9FF;
+  color: #A8BFF3;
+  font-size: 12px;
+  line-height: 45px;
+  /* margin-top: 20px;
+  margin-bottom: 30px; */
+}
+
+.carNumber-newpower-add {
+  font-size: 36px;
+}
+
+/* 确认按钮 */
+.carNumberBtn {
+  border-radius: 4px;
+  margin: 80px 40px;
+}
+
+.carNumber {
+  padding: 0 10px;
+  margin-bottom: 30px;
+}
+
+.n_name {
+  font-size: 18px;
+  margin-top: -10px;
+}

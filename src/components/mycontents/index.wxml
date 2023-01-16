@@ -1,0 +1,6 @@
+<view class="my-content">
+  <slot name="myTopContentSlot" />
+  <view class="main">
+    <slot name="myContentSlot" />
+  </view>
+</view>
