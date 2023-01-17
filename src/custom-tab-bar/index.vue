@@ -91,5 +91,6 @@ globalThis.app.changeTab = changeTab; //注册全局函数
 </script>
 
 <style>
-
+/* 引用全局样式 */
+@import "../app.css";
 </style>
