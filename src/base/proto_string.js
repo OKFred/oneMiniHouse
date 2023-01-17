@@ -2,7 +2,7 @@ String.prototype.firstUpperCase = function () {
   const arr = this.split(" ");
   const upperWords = [];
   arr.forEach((str) => {
-      upperWords.push(str.charAt(0).toUpperCase() + str.slice(1));
+    upperWords.push(str.charAt(0).toUpperCase() + str.slice(1));
   });
   const result = upperWords.join(" ");
   return result;
@@ -25,7 +25,7 @@ String.prototype.dataURItoBlob = function () {
 
   // set the bytes of the buffer to the correct values
   for (let i = 0; i < byteString.length; i++) {
-      ia[i] = byteString.charCodeAt(i);
+    ia[i] = byteString.charCodeAt(i);
   }
 
   // write the ArrayBuffer to a blob, and you're done
@@ -36,14 +36,14 @@ String.prototype.dataURItoBlob = function () {
 String.prototype.validateEmail = function () {
   const email = this.toString();
   const re =
-      /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/;
+    /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/;
   return re.test(String(email).toLowerCase());
 }; /* 邮箱地址验证 */
 
 String.prototype.encodeNonASCII = function () {
   const arr = [...this];
   for (let i = 0; i < arr.length; i++) {
-      if (arr[i].charCodeAt() > 255) arr[i] = encodeURI(arr[i]);
+    if (arr[i].charCodeAt() > 255) arr[i] = encodeURI(arr[i]);
   }
   return arr.join("");
 };
@@ -57,7 +57,7 @@ String.prototype.decodeHTMLEntity = function () {
 };
 
 String.prototype.encodeHTMLEntity = function () {
-  var div = document.createElement("div");
+  let div = document.createElement("div");
   div.appendChild(document.createTextNode(this));
   return div.innerHTML;
 };
@@ -80,21 +80,30 @@ String.prototype.hexToFloat = function hexToFloat() {
   let multi = 1;
   let result; //返回值
   if (/^0x/.exec(hex)) {
-      dec = parseInt(hex, 16);
+    dec = parseInt(hex, 16);
   } else {
-      for (let i = hex.length - 1; i >= 0; i -= 1) {
-          if (hex.charCodeAt(i) > 255) return console.log("Wrong string--非16进制");
-          dec += hex.charCodeAt(i) * multi;
-          multi *= 256;
-      }
+    for (let i = hex.length - 1; i >= 0; i -= 1) {
+      if (hex.charCodeAt(i) > 255) return console.log("Wrong string--非16进制");
+      dec += hex.charCodeAt(i) * multi;
+      multi *= 256;
+    }
   }
   sign = dec >>> 31 ? -1 : 1;
   exp = ((dec >>> 23) & 0xff) - 127;
   mantissa = ((dec & 0x7fffff) + 0x800000).toString(2);
   for (let i = 0; i < mantissa.length; i += 1) {
-      float += parseInt(mantissa[i]) ? Math.pow(2, exp) : 0;
-      exp--;
+    float += parseInt(mantissa[i]) ? Math.pow(2, exp) : 0;
+    exp--;
   }
   result = float * sign;
   return result;
 }; //16进制转换为小数
+
+String.prototype.hexToASCII = function hexToASCII(str1 = this) {
+  let hex = str1.toString();
+  let str = "";
+  for (let n = 0; n < hex.length; n += 2) {
+    str += String.fromCharCode(parseInt(hex.substr(n, 2), 16));
+  }
+  return str;
+}; //16进制 → ASCII

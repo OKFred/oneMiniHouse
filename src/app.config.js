@@ -35,17 +35,6 @@ function pageFinder() {
 
 export default {
   ...pageFinder(),
-  /*   pages: ["pages/index/index", "pages/mine/index"],
-  subpackages: [
-    {
-      root: "pages/spend", //支出
-      pages: pageFinder(/^\/pages\/spend\//gi),
-    },
-    {
-      root: "pages/expense",
-      pages: pageFinder(/^\/pages\/income\//gi),
-    },
-  ], */
   window: {
     backgroundTextStyle: "light",
     navigationBarBackgroundColor: "#fff",

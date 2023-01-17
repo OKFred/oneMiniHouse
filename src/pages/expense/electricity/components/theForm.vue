@@ -152,6 +152,10 @@ function taskStart() {
 
 function dataReader(hex) {
   // console.log(hex)
+  if (/Port already in use/gi.test(hex.hexToASCII())) {
+    console.log('端口已被占用')
+    return globalThis.queryResult(false, '端口已被占用')
+  };//ser2net 返回的错误信息
   let device_address = hex.substring(0, 2);
   let byte_read = hex.substring(4, 6);
   let bufferReset = () => {

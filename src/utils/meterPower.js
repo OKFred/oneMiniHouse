@@ -23,7 +23,7 @@ let main = (() => {
   function energyQuery() {
     let targetMemory = "4000";
     let byteRead = "0002";
-    return deviceAddress + codeWrite + targetMemory + byteRead;
+    return deviceAddress + codeRead + targetMemory + byteRead;
   } // 默认（580340000002DD02）读取电能
 
   function energyClearQuery() {

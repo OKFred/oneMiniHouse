@@ -146,7 +146,9 @@ function onToggleGraph() {
 
 function initChart() {
   const current = Taro.getCurrentInstance()
-  current.page.selectComponent('#echart').init((canvas, width, height) => {
+  let myChart = current.page.selectComponent('#echart');
+  if (!myChart) return console.log('图表不存在或者未识别')
+  myChart.init((canvas, width, height) => {
     const chart = echarts.init(canvas, null, {
       width,
       height,
