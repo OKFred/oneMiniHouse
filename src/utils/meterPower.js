@@ -5,32 +5,62 @@ let main = (() => {
   //如： 5803204364CCCD000000000000000000000000000000003F800000000000004247EB85ACC2(基础数据)
   //基础(0,6) 电压(6,14) 电流(14-22) 有功(22-30) 无功(30-38) 视在(38-46) 功率因素(46-54) 电网频率(62,70)
   //5803043F9333339BEA (电能)
+  //产品手册：https://im.chint.com/Upload/File/20210811160117.pdf
+  //从DL/T 645-2007切换到modbus：http://m.gkong.com/bbs/489496.ashx
+
+  let deviceAddress = "58";
+  let codeRead = "03";
+  let codeWrite = "10";
+  let generalLength = 74;
+  let energyLength = 18;
 
   function generalQuery() {
-    return "580320000010430F";
-  } // 读电压、电流、有功、无功、视在、功率因素、电网频率
+    let targetMemory = "2000";
+    let byteRead = "0010";
+    return deviceAddress + codeRead + targetMemory + byteRead;
+  } // 默认（580320000010430F）读电压、电流、有功、无功、视在、功率因素、电网频率
 
   function energyQuery() {
-    return "580340000002DD02";
-  } // 读取电能
+    let targetMemory = "4000";
+    let byteRead = "0002";
+    return deviceAddress + codeWrite + targetMemory + byteRead;
+  } // 默认（580340000002DD02）读取电能
 
   function energyClearQuery() {
-    return "581000020001020001F021";
+    let targetMemory = "0002";
+    let byteWrite = "0001";
+    let byteLength = "02";
+    let dataWrite = "0001";
+    return (
+      deviceAddress +
+      codeWrite +
+      targetMemory +
+      byteWrite +
+      byteLength +
+      dataWrite
+    );
   } //58 10 0002 0001 02 0001(未含cs) 电能清零
 
   function stopBitChangeQuery() {
-    return "581000050001020005";
-  } //581000050001020005 切换为1个停止位
+    let targetMemory = "0005";
+    let byteWrite = "0001";
+    let byteLength = "02";
+    let dataWrite = "0005";
+    return (
+      deviceAddress +
+      codeWrite +
+      targetMemory +
+      byteWrite +
+      byteLength +
+      dataWrite
+    );
+  } //58 10 0005 0001 02 0005 切换为1个停止位
 
   function hexConverter(hex) {
     if (hex == "00000000") return 0;
     let result = String("0x" + hex).hexToFloat();
     return result;
   }
-
-  let deviceAddress = "58";
-  let generalLength = 74;
-  let energyLength = 18;
 
   function generalReader(hex) {
     let device_address = hex.substring(0, 2);
@@ -60,6 +90,7 @@ let main = (() => {
       crc_byte_high,
       crc_byte_low,
       query_time,
+      hex,
     };
     // console.log(result);
     return result;
@@ -81,6 +112,7 @@ let main = (() => {
       crc_byte_high,
       crc_byte_low,
       query_time,
+      hex,
     };
     // console.log(result);
     return result;

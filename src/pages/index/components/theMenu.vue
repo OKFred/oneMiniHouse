@@ -40,6 +40,7 @@ import {
 //图片-支出
 import icon_electricity from "@/src/assets/electricity.svg";
 import icon_tempHumidity from "@/src/assets/tempHumidity.svg";
+import icon_sound from "@/src/assets/sound.svg";
 
 definePageConfig({
   navigationStyle: "custom",
@@ -74,6 +75,12 @@ setData({
       label: "温湿度",
       page: "环境-温湿度",
       src: icon_tempHumidity,
+    },
+    {
+      parent: "环境",
+      label: "音量",
+      page: "环境-音量",
+      src: icon_sound,
     },
   ],
 });

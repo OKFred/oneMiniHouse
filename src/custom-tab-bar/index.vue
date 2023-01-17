@@ -1,32 +1,16 @@
 <template>
   <myfooters v-if="localObj.footerArr && localObj.footerArr.length">
     <template #myFooterSlot>
-      <view
-        v-for="(item, index) in localObj.footerArr"
-        :key="index"
-        :data-obj="item"
-        class="my-center my-center-vertically"
-        style="width: 100%; flex-direction: column"
-        @tap="onNav({ pageName: item.page, navType: item.type })"
-      >
-        <image
-          v-if="item.active && item.src[0]"
-          style="height: 40px"
-          :src="item.src[0]"
-          mode="heightFix"
-        />
-        <image
-          v-if="!item.active && item.src[1]"
-          style="height: 40px"
-          :src="item.src[1]"
-          mode="heightFix"
-        />
-        <view
-          class="my-font"
-          :style="
-            'margin-top: 0.2rem; color:' + item.active ? '#4496F9' : '#BDD2EC'
-          "
-        >
+      <view v-for="(item, index) in localObj.footerArr" :key="index" :data-obj="item"
+        class="my-center my-center-vertically" style="width: 100%; flex-direction: column"
+        @tap="onNav({ pageName: item.page, navType: item.type })">
+        <image v-if="item.active && item.src[0]" style="height: 40px; width: 40px;" :src="item.src[0]"
+          mode="heightFix" />
+        <image v-if="!item.active && item.src[1]" style="height: 40px; width: 40px;" :src="item.src[1]"
+          mode="heightFix" />
+        <view class="my-font" :style="
+          'margin-top: 0.2rem; color:' + item.active ? '#4496F9' : '#BDD2EC'
+        ">
           {{ item.label }}
         </view>
       </view>
@@ -50,10 +34,10 @@ import {
 
 //组件引入
 import myfooters from "@/src/components/myfooters/index.vue"; //引入组件
-import tabHomeH from "@/src/assets/icon_tab_home_h.png"; //引入图片
-import tabHomeN from "@/src/assets/icon_tab_home_n.png"; //引入图片
-import tabMeH from "@/src/assets/icon_tab_me_h.png"; //引入图片
-import tabMeN from "@/src/assets/icon_tab_me_n.png"; //引入图片
+import icon_home_selected from "@/src/assets/home_selected.svg"; //引入图片
+import icon_home_unselected from "@/src/assets/home_unselected.svg"; //引入图片
+import icon_me_selected from "@/src/assets/me_selected.svg"; //引入图片
+import icon_me_unselected from "@/src/assets/me_unselected.svg"; //引入图片
 
 definePageConfig({
   usingComponents: {
@@ -76,7 +60,7 @@ let localObj = reactive({
       label: "首页",
       page: "首页",
       type: "switchTab",
-      src: [tabHomeH, tabHomeN],
+      src: [icon_home_selected, icon_home_unselected],
       active: true,
       disabled: true, //同一页面禁止点击
     },
@@ -84,20 +68,11 @@ let localObj = reactive({
       label: "我的",
       page: "我的",
       type: "switchTab",
-      src: [tabMeH, tabMeN],
+      src: [icon_me_selected, icon_me_unselected],
       active: false,
     },
   ],
 });
-
-/*
-watch(
-    () => props.globalObj.msgs[localObj.name],
-    (newValue, oldValue) => {
-        if (newValue) distribute(newValue)
-    },
-    { immediate: true },
-) //处理来自App.vue的消息分发 */
 
 function changeTab({ tabName } = {}) {
   let { footerArr } = localObj;
@@ -116,6 +91,5 @@ globalThis.app.changeTab = changeTab; //注册全局函数
 </script>
 
 <style>
-/* 引用全局样式 */
-@import "../app.css";
+
 </style>

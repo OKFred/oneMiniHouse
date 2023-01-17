@@ -17,4 +17,9 @@ export default [
     url: "/pages/environment/tempHumidity/index",
     root: "pages/environment",
   },
+  {
+    name: "环境-音量",
+    url: "/pages/environment/sound/index",
+    root: "pages/environment",
+  },
 ];

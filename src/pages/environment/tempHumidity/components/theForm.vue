@@ -28,7 +28,11 @@ import bg from "@/src/main/bg.js";
 import tcpLink from "@/src/utils/tcpLink.js";
 import sensorHotWet from "@/src/utils/sensorHotWet.js";
 
-const hotWetQueryHex = sensorHotWet.hotWetQuery();
+const hotWetQueryHex = (() => {
+  let hex = sensorHotWet.hotWetQuery();
+  hex += modbus.crc(hex);
+  return hex;
+})()
 
 definePageConfig({
   navigationStyle: "custom",
@@ -90,8 +94,11 @@ setData({
 });
 
 function tcpInit() {
+  let bgObj = bg.read();
+  if (!bgObj.address) bgObj.address = globalThis.app.globalData.address;
+  if (!bgObj.port) bgObj.port = globalThis.app.globalData.port;
   tcpLink.setData({
-    ...bg.read(),
+    ...bgObj,
     query: hotWetQueryHex,
     dataReader, //设置对应的数据读取器
     saver
@@ -162,11 +169,11 @@ function dataReader(hex) {
   }
   if (byte_read === "04") {
     let formName = "主表单";
-    if (hex.length < sensorHotWet.hotWetLength) {
+    if (hex.length < sensorHotWet.generalLength) {
       props.localObj.currentBuffer = formName;
       // console.log('🚩①长度不足，先放缓存')
       return bufferAdd(hex);
-    } else if (hex.length > sensorHotWet.hotWetLength) hex = hex.substring(0, sensorHotWet.hotWetLength); //长度校验；
+    } else if (hex.length > sensorHotWet.generalLength) hex = hex.substring(0, sensorHotWet.generalLength); //长度校验；
     bufferReset();
     if (!crcCheck) return
     return setForm(formName, hex);
@@ -181,7 +188,7 @@ function setForm(formName, hex) {
       props.localObj.formCollection[formName].pop()
     }
   } //暂存数据，用于投喂图表
-  if (formName === '主表单' && hex.length === sensorHotWet.hotWetLength) {
+  if (formName === '主表单' && hex.length === sensorHotWet.generalLength) {
     // console.log('✅pass')
     let generalObj = sensorHotWet.hotWetReader(hex);
     dataSaver(generalObj);

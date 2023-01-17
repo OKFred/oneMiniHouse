@@ -1,9 +1,9 @@
 <template>
-  <image
-    class="my-header-image"
-    :src="localObj.headerImage"
-    style="width: 100%"
-    mode="widthFix"
+  <view
+    class="my-header-color"
+    :style="
+      'background-color:' +
+      (parentObj.headerColor? parentObj.headerColor : 'white')"
   />
   <view class="my-header">
     <view class="my-center">
@@ -30,9 +30,6 @@
 
 <script setup>
 import { reactive, watch, onMounted, defineProps } from "vue";
-import headerBlack from "@/src/assets/header-black.png"; //引入图片
-import headerBlue from "@/src/assets/header-blue.png"; //引入图片
-import headerWhite from "@/src/assets/header-white.png"; //引入图片
 
 definePageConfig({
   navigationStyle: "custom",
@@ -50,29 +47,6 @@ const props = defineProps({
   parentObj: Object,
 });
 
-//本地数据
-const localObj = reactive({
-  headerImage: "",
-});
-
-watch(
-  () => props.parentObj,
-  (newValue, oldValue) => {
-    if (newValue) init(newValue);
-    // console.log(newValue);
-  },
-  { immediate: true }
-);
-
-function init(parentObj) {
-  localObj.headerImage =
-    parentObj.headerColor === "black"
-      ? headerBlack
-      : parentObj.headerColor === "blue"
-      ? headerBlue
-      : headerWhite; //根据父系传入的颜色，设置背景图片
-}
-
 /* onMounted(() => {
   console.log("加载组件");
 }); */
@@ -86,10 +60,11 @@ function init(parentObj) {
   z-index: 3;
   margin-top: 3.3rem;
 }
-.my-header-image {
+.my-header-color {
   position: fixed;
   width: 100%;
   z-index: 2;
+  height: 5.4rem;
 }
 .my-header-navback {
   position: fixed;

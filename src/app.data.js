@@ -2,6 +2,8 @@ export default {
   globalData: {
     appName: "冷库信息化-记账",
     appPublicName: "农企服",
+    address: "tcp.fred.wiki",
+    port: 8899,
     server: (() => {
       return process.env.NODE_ENV === "development"
         ? "https://本地开发环境.com"

@@ -1,12 +1,22 @@
 let main = (() => {
   // https://item.taobao.com/item.htm?id=582340027559
   // 温湿度传感器查询指令
-  function hotWetQuery() {
-    return "010400010002200b";
-  }
+  let deviceAddress = "0F";
+  let codeRead = "04";
+  let codeWrite = "06";
+  let generalLength = 18;
 
-  let hotWetLength = 18;
-  let deviceAddress = "01";
+  function hotWetQuery() {
+    let targetMemory = "0001";
+    let byteRead = "0002";
+    return deviceAddress + codeRead + targetMemory + byteRead;
+  } //010400010002200B
+
+  function addressWhiteQuery() {
+    let targetMemory = "0101";
+    let dataWrite = "0007";
+    return deviceAddress + codeWrite + targetMemory + dataWrite;
+  } //0F0601010007 、修改地址为07
 
   //然后应该会回复16进制数据，如：010404012000E0FA3A
   function hotWetReader(hex) {
@@ -31,11 +41,18 @@ let main = (() => {
       crc_byte_high,
       crc_byte_low,
       query_time,
+      hex,
     };
     // console.log(result);
     return result;
   }
-  return { hotWetQuery, hotWetReader, hotWetLength, deviceAddress };
+  return {
+    hotWetQuery,
+    hotWetReader,
+    addressWhiteQuery,
+    deviceAddress,
+    generalLength,
+  };
 })();
 
 export default main;
