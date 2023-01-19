@@ -13,6 +13,11 @@ export default [
     root: "pages/expense",
   },
   {
+    name: "环境-综合检测",
+    url: "/pages/environment/mix/index",
+    root: "pages/environment",
+  },
+  {
     name: "环境-温湿度",
     url: "/pages/environment/tempHumidity/index",
     root: "pages/environment",

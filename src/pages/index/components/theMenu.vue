@@ -41,6 +41,7 @@ import {
 import icon_electricity from "@/src/assets/electricity.svg";
 import icon_tempHumidity from "@/src/assets/tempHumidity.svg";
 import icon_sound from "@/src/assets/sound.svg";
+import icon_mix from "@/src/assets/mix.svg";
 
 definePageConfig({
   navigationStyle: "custom",
@@ -69,6 +70,12 @@ setData({
       label: "电表",
       page: "支出-电表",
       src: icon_electricity,
+    },
+    {
+      parent: "环境",
+      label: "综合检测",
+      page: "环境-综合检测",
+      src: icon_mix,
     },
     {
       parent: "环境",
