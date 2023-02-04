@@ -1,7 +1,7 @@
 export default {
   globalData: {
-    appName: "冷库信息化-记账",
-    appPublicName: "农企服",
+    appName: "oneMiniHouse",
+    appPublicName: "oneHouse",
     address: "tcp.fred.wiki",
     port: 8899,
     server: (() => {

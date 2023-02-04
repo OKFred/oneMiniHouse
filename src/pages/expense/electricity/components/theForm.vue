@@ -241,7 +241,7 @@ function setForm(formName, hex) {
       crc_byte_low,
       query_time,
     } = generalObj;
-    formArr.find((obj) => obj.label === "查询时间").value = new Date(query_time).toLocaleString();
+    formArr.find((obj) => obj.label === "查询时间").value = new Date(query_time).Format('yyyy-MM-dd hh:mm:ss');
     formArr.find((obj) => obj.label === "设备地址").value = device_address;
     /*  formArr.find((obj) => obj.label === "功能码").value = function_code;
     formArr.find((obj) => obj.label === "读取字节数").value = byte_read; */
@@ -262,7 +262,7 @@ function setForm(formName, hex) {
     /* formArr.find((obj) => obj.label === "设备地址").value = device_address;
     formArr.find((obj) => obj.label === "功能码").value = function_code;
     formArr.find((obj) => obj.label === "读取字节数").value = byte_read; */
-    formArr.find((obj) => obj.label === "电能").value = energy;
+    formArr.find((obj) => obj.label === "电能").value = energy?.toFixed(4);
     /* formArr.find((obj) => obj.label === "CRC高位").value = crc_byte_high;
     formArr.find((obj) => obj.label === "CRC低位").value = crc_byte_low; */
   }
