@@ -204,7 +204,7 @@ function setForm(formName, hex) {
       crc_byte_low,
       query_time,
     } = generalObj;
-    formArr.find((obj) => obj.label === "查询时间").value = new Date(query_time).toLocaleString();
+    formArr.find((obj) => obj.label === "查询时间").value = new Date(query_time).Format('yyyy-MM-dd hh:mm:ss');
     formArr.find((obj) => obj.label === "设备地址").value = device_address;
     formArr.find((obj) => obj.label === "音量").value = volume;
   }

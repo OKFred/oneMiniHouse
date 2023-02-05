@@ -31,13 +31,13 @@ import bg from "@/src/main/bg.js";
 import tcpLink from "@/src/utils/tcpLink.js";
 import meterPower from "@/src/utils/meterPower.js";
 
-const generalQueryHex = (() => {
-  let hex = meterPower.generalQuery();
+const energyQueryHex = (() => {
+  let hex = meterPower.energyQuery();
   hex += modbus.crc(hex);
   return hex;
 })();
-const energyQueryHex = (() => {
-  let hex = meterPower.energyQuery();
+const detailQueryHex = (() => {
+  let hex = meterPower.detailQuery();
   hex += modbus.crc(hex);
   return hex;
 })();
@@ -77,21 +77,29 @@ setData({
   intervalTask: null,
   currentBuffer: "",
   buffers: {
-    '主表单': '',
     '电能表单': '',
+    '参数表单': '',
   },
   formCollection: {
-    '主表单': [],
     '电能表单': [],
+    '参数表单': [],
   },
   forms: [
     {
       onEdit,
       onEditComplete,
-      parent: "主表单",
+      parent: "电能表单",
       formArr: [
         { label: "查询时间", value: "" },
         { label: "设备地址", value: "" },
+        { label: "电能", value: "", postfix: "千瓦时(度)", postfixColor: 'grey' },
+      ],
+    },
+    {
+      onEdit,
+      onEditComplete,
+      parent: "参数表单",
+      formArr: [
         { label: "电压", value: "", postfix: "伏", postfixColor: 'grey' },
         { label: "电流", value: "", postfix: "安", postfixColor: 'grey' },
         { label: "有用功率", value: "", postfix: "瓦", postfixColor: 'grey' },
@@ -99,14 +107,6 @@ setData({
         { label: "视在功率", value: "", postfix: "伏安", postfixColor: 'grey' },
         { label: "频率", value: "", postfix: "赫兹", postfixColor: 'grey' },
         { label: "功率因数", value: "" },
-      ],
-    },
-    {
-      onEdit,
-      onEditComplete,
-      parent: "电能表单",
-      formArr: [
-        { label: "电能", value: "", postfix: "千瓦时(度)", postfixColor: 'grey' },
       ],
     },
   ],
@@ -118,7 +118,7 @@ function tcpInit() {
   if (!bgObj.port) bgObj.port = globalThis.app.globalData.port;
   tcpLink.setData({
     ...bgObj,
-    query: generalQueryHex,
+    query: detailQueryHex,
     dataReader, //设置对应的数据读取器
     saver
   });
@@ -143,7 +143,7 @@ function taskStart() {
   console.log("开启轮询");
   globalThis.queryResult(true, "连接中，请稍后...");
   props.localObj.intervalTask = setInterval(() => {
-    let status = tcpLink.sendMessage(generalQueryHex); //发送问询数据
+    let status = tcpLink.sendMessage(detailQueryHex); //发送问询数据
     if (!status) clearInterval(props.localObj.intervalTask);
     setTimeout(() => tcpLink.sendMessage(energyQueryHex), 1000);
     // console.log("同时查询电能");
@@ -192,22 +192,22 @@ function dataReader(hex) {
       return bufferReset();
     }
   }
-  if (byte_read === "20") {
-    let formName = "主表单";
-    if (hex.length < meterPower.generalLength) { //[本应该到74，TCP buffer 长度限制在了64]
-      props.localObj.currentBuffer = formName;
-      // console.log('🚩①长度不足，先放缓存')
-      return bufferAdd(hex);
-    } else if (hex.length > meterPower.generalLength) hex = hex.substring(0, meterPower.generalLength); //长度校验；
-    bufferReset();
-    if (!crcCheck) return
-    return setForm(formName, hex);
-  } else if (byte_read === "04") {
+  if (byte_read === "04") {
     let formName = "电能表单";
     if (hex.length < meterPower.energyLength) {
       props.localObj.currentBuffer = formName;
       return bufferAdd(hex);
     } else if (hex.length > meterPower.energyLength) hex = hex.substring(0, meterPower.energyLength); //长度校验；
+    bufferReset();
+    if (!crcCheck) return
+    return setForm(formName, hex);
+  } else if (byte_read === "20") {
+    let formName = "参数表单";
+    if (hex.length < meterPower.detailLength) { //[本应该到74，TCP buffer 长度限制在了64]
+      props.localObj.currentBuffer = formName;
+      // console.log('🚩①长度不足，先放缓存')
+      return bufferAdd(hex);
+    } else if (hex.length > meterPower.detailLength) hex = hex.substring(0, meterPower.detailLength); //长度校验；
     bufferReset();
     if (!crcCheck) return
     return setForm(formName, hex);
@@ -222,10 +222,22 @@ function setForm(formName, hex) {
       props.localObj.formCollection[formName].pop()
     }
   } //暂存数据，用于投喂图表
-  if (formName === '主表单' && hex.length === meterPower.generalLength) {
+  if (formName === '电能表单' && hex.length === meterPower.energyLength) {
     // console.log('✅pass')
-    let generalObj = meterPower.generalReader(hex);
-    dataSaver(generalObj);
+    let energyObj = meterPower.energyReader(hex);
+    dataSaver(energyObj)
+    let { device_address, energy, query_time } = energyObj;
+    formArr.find((obj) => obj.label === "查询时间").value = new Date(query_time).Format('yyyy-MM-dd hh:mm:ss');
+    formArr.find((obj) => obj.label === "设备地址").value = device_address;
+    formArr.find((obj) => obj.label === "电能").value = energy?.toFixed(2);
+    /*  formArr.find((obj) => obj.label === "功能码").value = function_code;
+    formArr.find((obj) => obj.label === "读取字节数").value = byte_read;
+    formArr.find((obj) => obj.label === "CRC高位").value = crc_byte_high;
+    formArr.find((obj) => obj.label === "CRC低位").value = crc_byte_low; */
+  } else if (formName === '参数表单' && hex.length === meterPower.detailLength) {
+    // console.log('✅pass')
+    let detailObj = meterPower.detailReader(hex);
+    dataSaver(detailObj);
     let {
       device_address,
       function_code,
@@ -240,10 +252,10 @@ function setForm(formName, hex) {
       crc_byte_high,
       crc_byte_low,
       query_time,
-    } = generalObj;
-    formArr.find((obj) => obj.label === "查询时间").value = new Date(query_time).Format('yyyy-MM-dd hh:mm:ss');
+    } = detailObj;
+    /* formArr.find((obj) => obj.label === "查询时间").value = new Date(query_time).Format('yyyy-MM-dd hh:mm:ss');
     formArr.find((obj) => obj.label === "设备地址").value = device_address;
-    /*  formArr.find((obj) => obj.label === "功能码").value = function_code;
+      formArr.find((obj) => obj.label === "功能码").value = function_code;
     formArr.find((obj) => obj.label === "读取字节数").value = byte_read; */
     formArr.find((obj) => obj.label === "电压").value = voltage?.toFixed(2);
     formArr.find((obj) => obj.label === "电流").value = current?.toFixed(2);
@@ -252,17 +264,6 @@ function setForm(formName, hex) {
     formArr.find((obj) => obj.label === "视在功率").value = (1000 * apparent_power)?.toFixed(2);
     formArr.find((obj) => obj.label === "功率因数").value = power_factor?.toFixed(2);
     formArr.find((obj) => obj.label === "频率").value = frequency?.toFixed(2);
-    /* formArr.find((obj) => obj.label === "CRC高位").value = crc_byte_high;
-    formArr.find((obj) => obj.label === "CRC低位").value = crc_byte_low; */
-  } else if (formName === '电能表单' && hex.length === meterPower.energyLength) {
-    // console.log('✅pass')
-    let energyObj = meterPower.energyReader(hex);
-    dataSaver(energyObj)
-    let { energy, query_time } = energyObj;
-    /* formArr.find((obj) => obj.label === "设备地址").value = device_address;
-    formArr.find((obj) => obj.label === "功能码").value = function_code;
-    formArr.find((obj) => obj.label === "读取字节数").value = byte_read; */
-    formArr.find((obj) => obj.label === "电能").value = energy?.toFixed(4);
     /* formArr.find((obj) => obj.label === "CRC高位").value = crc_byte_high;
     formArr.find((obj) => obj.label === "CRC低位").value = crc_byte_low; */
   }

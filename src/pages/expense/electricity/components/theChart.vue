@@ -200,7 +200,7 @@ setTimeout(initChart, 500);
 
 
 watch(
-  () => props.localObj.formCollection['主表单'],
+  () => props.localObj.formCollection['参数表单'],
   (newValue, oldValue) => {
     if (newValue && newValue.length > 0) {
       let voltageArr = newValue.map(obj => obj.voltage?.toFixed(2));

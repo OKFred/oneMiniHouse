@@ -11,20 +11,20 @@ let main = (() => {
   let deviceAddress = "58";
   let codeRead = "03";
   let codeWrite = "10";
-  let generalLength = 74;
   let energyLength = 18;
-
-  function generalQuery() {
-    let targetMemory = "2000";
-    let byteRead = "0010";
-    return deviceAddress + codeRead + targetMemory + byteRead;
-  } // 默认（580320000010430F）读电压、电流、有功、无功、视在、功率因素、电网频率
+  let detailLength = 74;
 
   function energyQuery() {
     let targetMemory = "4000";
     let byteRead = "0002";
     return deviceAddress + codeRead + targetMemory + byteRead;
   } // 默认（580340000002DD02）读取电能
+
+  function detailQuery() {
+    let targetMemory = "2000";
+    let byteRead = "0010";
+    return deviceAddress + codeRead + targetMemory + byteRead;
+  } // 默认（580320000010430F）读电压、电流、有功、无功、视在、功率因素、电网频率
 
   function energyClearQuery() {
     let targetMemory = "0002";
@@ -62,7 +62,7 @@ let main = (() => {
     return result;
   }
 
-  function generalReader(hex) {
+  function detailReader(hex) {
     let device_address = hex.substring(0, 2);
     let function_code = hex.substring(2, 4);
     let byte_read = hex.substring(4, 6);
@@ -118,13 +118,13 @@ let main = (() => {
     return result;
   } //电表电能数据解读
   return {
-    generalReader,
-    generalQuery,
-    energyReader,
+    detailQuery,
+    detailReader,
     energyQuery,
+    energyReader,
     energyClearQuery,
     stopBitChangeQuery,
-    generalLength,
+    detailLength,
     energyLength,
     deviceAddress,
   };

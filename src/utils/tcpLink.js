@@ -1,5 +1,5 @@
 import { createTCPSocket } from "@tarojs/taro";
-import { Buffer } from "buffer";
+import { Buffer } from "buffer"; //Node v16 需要引入
 
 let main = (() => {
   let tcp = {

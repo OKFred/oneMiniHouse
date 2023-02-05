@@ -53,7 +53,7 @@
       </view>
       <view style="margin-top: 1rem" />
       <mybuttond :text="'返 回'" color="blue-plain" style="width: 40vw" @tap="onBtnClick"
-        :data-date="new Date().toLocaleString()" />
+        :data-date="new Date().Format('yyyy-MM-dd hh:mm:ss')" />
     </slot-view>
   </mycontents>
   <!-- <image :src="headerBlack" /> -->
@@ -323,7 +323,7 @@ if (device_address === "58") {
         crc_byte_high;
       localObj.formPowerArr.find((obj) => obj.label === "CRC低位").value =
         crc_byte_low; */
-      localObj.queryTime = new Date(query_time).toLocaleString();
+      localObj.queryTime = new Date(query_time).Format('yyyy-MM-dd hh:mm:ss');
       return;
     } else if (byte_read === "04" && hex.length === 18) {
       let { energy, query_time } = meterPower.energyReader(hex);
@@ -339,7 +339,7 @@ if (device_address === "58") {
         crc_byte_high;
       localObj.formPowerArr.find((obj) => obj.label === "CRC低位").value =
         crc_byte_low; */
-      localObj.queryTime = new Date(query_time).toLocaleString();
+      localObj.queryTime = new Date(query_time).Format('yyyy-MM-dd hh:mm:ss');
       return;
     } else console.log("有例外的？", hex, hex.length);
   } else console.log("未知设备", hex);
