@@ -23,8 +23,7 @@ import {
 } from "vue";
 
 //组件引入
-import mybuttond from "/src/components/mybuttond/index.vue"; //引入组件
-import echarts from "/src/components/ec-canvas/echarts.js"; //引入组件
+// import echarts from "/src/components/ec-canvas/echarts.js"; //引入组件
 
 //父系入参
 const { onNav, onNavBack, globalData } = globalThis.app;
