@@ -10,10 +10,10 @@
       自由输入
       <van-icon name="edit" style="margin-left: 0.3rem" />
     </view>
-    <input v-show="parentObj.editing" :type="'text'" :value="parentObj.plateNumber" :placeholder="'请输入'"
-      placeholder-class="my-font" :focus="true" @tap.stop="(e) => { }"
+    <input v-if="parentObj.editing" :type="'text'" :value="parentObj.plateNumber" :placeholder="'请输入'"
+      placeholder-style="font-size: 1rem;" :focus="true" @tap.stop="(e) => { }"
       @blur.stop="(e) => onInputComplete(e.detail.value)" />
-    <view class="carNumber" style="margin-top: 50rpx" v-show="!parentObj.editing">
+    <view class="carNumber" style="margin-top: 50rpx" v-if="!parentObj.editing">
       <view class="weui-cells__title"></view>
       <!-- 车牌号头两位 -->
       <view class="carNumber-items">
@@ -43,12 +43,12 @@
         </view>
         <!-- 新能源 -->
         <view :class="`carNumber-item ${parentObj.showNewPower ? '' : 'carNumber-item-newpower'
-        }`">
-          <view v-show="!parentObj.showNewPower" @tap.stop="parentObj.showPowerBtn">
+          }`">
+          <view v-if="!parentObj.showNewPower" @tap.stop="parentObj.showPowerBtn">
             <view class="carNumber-newpower-add">+</view>
             <view class="n_name">新能源</view>
           </view>
-          <view v-show="parentObj.showNewPower" @tap.stop="parentObj.openKeyboard">
+          <view v-if="parentObj.showNewPower" @tap.stop="parentObj.openKeyboard">
             {{ parentObj.numberArr[7] }}
           </view>
         </view>
@@ -60,12 +60,12 @@
   </button> -->
   </van-dialog>
   <!-- 虚拟键盘 -->
-  <view class="keyboard" v-show="parentObj.KeyboardState">
+  <view class="keyboard" v-if="parentObj.KeyboardState">
     <view class="keyboardClose">
       <view class="keyboardClose_btn" @tap="parentObj.closeKeyboard">关闭</view>
     </view>
     <!-- 省份简写键盘 -->
-    <view class="keyboard-item" v-show="!parentObj.numberArr[0]">
+    <view class="keyboard-item" v-if="!parentObj.numberArr[0]">
       <view class="keyboard-line" v-for="(item, index) in localObj.provinces" :key="index">
         <view :class="`keyboard-btn ${str === '云' ? 'keyboard-big-btn' : ''}`" @tap="bindChoose(str)"
           v-for="(str, index) in item" :key="index">
@@ -78,7 +78,7 @@
       </view>
     </view>
     <!-- 车牌号码选择键盘 -->
-    <view class="keyboard-item iscarnumber" v-show="parentObj.numberArr[0]">
+    <view class="keyboard-item iscarnumber" v-if="parentObj.numberArr[0]">
       <view class="keyboard-line" v-for="(item, index) in localObj.numbers" :key="index">
         <view class="keyboard-btn" v-for="(str, index) in item" :key="index" @tap="bindChoose(str)">
           {{ str }}
@@ -127,18 +127,6 @@ let localObj = reactive({
     ["L", "M", "N", "P", "Q", "R", "S", "T", "U", "V"],
     ["W", "X", "Y", "Z", "港", "澳", "学", "挂"],
   ],
-});
-
-onMounted(() => {
-  // console.log("加载组件");
-});
-
-definePageConfig({
-  navigationStyle: "custom",
-  usingComponents: {
-    "van-dialog": "@vant/weapp/dialog/index",
-    "van-icon": "@vant/weapp/icon/index",
-  },
 });
 
 function setData(obj) {

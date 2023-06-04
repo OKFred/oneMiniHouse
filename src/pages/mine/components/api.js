@@ -1,5 +1,5 @@
 //框架引入
-import bg from "@/src/main/bg.js";
+import bg from "/src/main/bg.js";
 
 let main = (() => {
   async function serverSaveQuery({ address, port } = {}) {

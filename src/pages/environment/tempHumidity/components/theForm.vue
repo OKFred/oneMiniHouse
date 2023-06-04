@@ -8,7 +8,6 @@
 
 <script setup>
 //框架引入
-import Taro from "@tarojs/taro";
 import {
   reactive,
   watch,
@@ -22,11 +21,11 @@ import {
 } from "vue";
 
 //组件引入
-import myCardsListd from "@/src/components/mycards-listd/index.vue"; //引入组件
-import modbus from "@/src/base/modbus.js";
-import bg from "@/src/main/bg.js";
-import tcpLink from "@/src/utils/tcpLink.js";
-import sensorHotWet from "@/src/utils/sensorHotWet.js";
+import myCardsListd from "/src/components/mycards-listd/index.vue"; //引入组件
+import modbus from "/src/base/modbus.js";
+import bg from "/src/main/bg.js";
+import tcpLink from "/src/utils/tcpLink.js";
+import sensorHotWet from "/src/utils/sensorHotWet.js";
 
 const hotWetQueryHex = (() => {
   let hex = sensorHotWet.hotWetQuery();
@@ -34,14 +33,8 @@ const hotWetQueryHex = (() => {
   return hex;
 })()
 
-definePageConfig({
-  navigationStyle: "custom",
-  usingComponents: {
-  },
-});
-
 //父系入参
-const { onNav, onNavBack } = globalThis.app;
+const { onNav, onNavBack, globalData } = globalThis.app;
 
 onMounted(() => {
   console.log("自动查询");

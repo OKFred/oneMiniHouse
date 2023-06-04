@@ -1,9 +1,8 @@
 //框架引入
-import Taro from "@tarojs/taro";
 
 let main = (() => {
   function check() {
-    let obj = Taro.getStorageInfoSync();
+    let obj = uni.getStorageInfoSync();
     let { currentSize, keys, limitSize } = obj;
     if (currentSize > limitSize) console.log("存储空间不足");
     return obj;
@@ -14,23 +13,23 @@ let main = (() => {
     if (key === undefined) {
       let { keys } = check();
       keys.forEach((k) => {
-        obj[k] = Taro.getStorageSync(k);
+        obj[k] = uni.getStorageSync(k);
       });
-    } else obj[key] = Taro.getStorageSync(key);
+    } else obj[key] = uni.getStorageSync(key);
     return obj;
   }
 
   function write(key, value) {
-    Taro.setStorageSync(key, value);
+    uni.setStorageSync(key, value);
     return read(key);
   }
 
   function remove(key) {
-    Taro.removeStorageSync(key);
+    uni.removeStorageSync(key);
   }
 
   function clear() {
-    Taro.clearStorageSync();
+    uni.clearStorageSync();
   }
 
   return {

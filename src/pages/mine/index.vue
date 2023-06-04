@@ -1,19 +1,19 @@
 <template>
-  <mytaro />
-  <myHeaderd :parentObj="localObj" />
+  <myUview :globalObj="globalObj" />
+  <myHeader :parentObj="localObj" />
   <view class="my-underground" />
-  <mycontents>
-    <slot-view :name="'myContentSlot'" style="margin-top: 7rem; margin-bottom: 5rem">
+  <myContent>
+    <template #myContentSlot>
+      <view style="margin-top: 5rem" />
       <view class="my-font">设置</view>
       <view style="margin-top: 1rem" />
       <theForm :localObj="localObj" />
-    </slot-view>
-  </mycontents>
+    </template>
+  </myContent>
 </template>
 
 <script setup>
 //框架引入
-import Taro from "@tarojs/taro";
 import {
   reactive,
   watch,
@@ -25,29 +25,25 @@ import {
   defineProps,
 } from "vue";
 
+import { onLoad, onShow } from "@dcloudio/uni-app";
+
 //组件引入
-import mytaro from "@/src/components/mytaro/index.vue" //公共页面配置
-import myHeaderd from "@/src/components/myheaderd/index.vue"; //引入组件
+import myUview from "/src/components/my-uview/index.vue";
+import myHeader from "/src/components/my-header/index.vue";
+import myContent from "/src/components/my-content/index.vue";
+
 import theForm from "./components/theForm.vue"; //引入自定义组件
 
-definePageConfig({
-  navigationStyle: "custom",
-  enableShareTimeline: true,
-  enableShareAppMessage: true,
-  usingComponents: {
-    mycontents: "@/src/components/mycontents/index",
-  },
-});
-
 //父系入参
-const { onNav, onNavBack } = globalThis.app;
+const { onNav, onNavBack, globalData } = globalThis.app;
+
 
 const props = defineProps({
   globalObj: Object,
 });
 
 onMounted(() => {
-  globalThis.app.changeTab({ tabName: "我的" });
+  // globalThis.app.changeTab({ tabName: "我的" });
 });
 
 //本地变量和函数

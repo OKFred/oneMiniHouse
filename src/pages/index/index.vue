@@ -1,21 +1,20 @@
 <template>
-  <mytaro />
-  <myHeaderd :parentObj="localObj" />
-  <view class="my-underground" />
-  <mycontents>
-    <slot-view :name="'myContentSlot'" style="margin: 6rem 0">
-      <view style="margin-top: 1rem" />
-      <view class="my-center">
-        <!-- <image :src="banner" style="height: 140px; width: 343px" mode="widthFix" /> -->
-      </view>
-      <theMenu :localObj="localObj" />
-    </slot-view>
-  </mycontents>
+  <myUview :globalObj="globalObj" />
+  <myHeader :parentObj="localObj">
+    <template #myHeaderSlot>
+      <theSearch :localObj="localObj" />
+      <view style="padding-top: 45px" v-if="globalData['平台'] === '嵌入网页'" />
+    </template>
+  </myHeader>
+  <view style="z-index: 12; position: relative; background: #F3F4F8; border-radius: 1rem 1rem 0 0;">
+    <view style="padding-top: 1vh;" />
+    <theMenu :localObj="localObj" />
+    <view style="padding-bottom: 10vh;" />
+  </view>
 </template>
 
 <script setup>
 //框架引入
-import Taro from "@tarojs/taro";
 import {
   reactive,
   watch,
@@ -27,52 +26,35 @@ import {
   defineProps,
 } from "vue";
 
-//组件引入
-import mytaro from "@/src/components/mytaro/index.vue" //公共页面配置
-import myHeaderd from "@/src/components/myheaderd/index.vue"; //引入公共组件
-import theMenu from "./components/theMenu.vue" //引入自定义组件
-// import banner from "@/src/assets/banner.png"; //引入图片
+import { onLoad, onShow, onHide, onReachBottom } from "@dcloudio/uni-app";
 
-definePageConfig({
-  navigationStyle: "custom",
-  enableShareTimeline: true,
-  enableShareAppMessage: true,
-  usingComponents: {
-    mycontents: "@/src/components/mycontents/index",
-  },
-});
+//组件引入
+import myUview from "/src/components/my-uview/index.vue";
+import myHeader from "/src/components/my-header/index.vue";
+
+//组件引入
+import theSearch from "./components/theSearch.vue" //引入自定义组件
+import theMenu from "./components/theMenu.vue" //引入自定义组件
 
 //父系入参
-const { onNav, onNavBack } = globalThis.app;
+const { onNav, onNavBack, globalData } = globalThis.app;
 
 const props = defineProps({
   globalObj: Object,
 });
 
-onMounted(() => {
-  globalThis.app.changeTab({ tabName: "首页" });
-  // fetchData()
-});
-
-function setData(obj = {}) {
-  Object.assign(localObj, obj);
-  return localObj;
-} //微信setData替代品
-
 //本地变量和函数
 let localObj = reactive({
   pageName: "首页",
-  headerColor: "white",
+  headerColor: "navyblue",
+  titleStyle: "color: white !important;",
   // showBackButton: true,
+  hidePageName: globalData['平台'] === '嵌入网页',
 });
 
-async function fetchData() {
-  let queryObj = globalThis.prepareMsg("保存前端日志");
-  let queryMsg = await doFetch(queryObj);
-  console.log(queryMsg);
-}
+onMounted(() => {
+  // globalThis.app.changeTab({ tabName: "首页" });
+});
 </script>
 
-<style>
-
-</style>
+<style></style>

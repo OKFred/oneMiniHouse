@@ -1,4 +1,4 @@
-/* Fred 20221129 */
+/* Fred 20230601 */
 
 /*
 * {
@@ -8,6 +8,13 @@ background: rgb(0 100 0 / 0.1) !important;
 }
 debug
  */
+
+/* 全局 */
+view,
+text {
+  font-family: 等线, Arial, Helvetica, sans-serif;
+}
+
 /* 子类居中 */
 .my-center {
   display: flex;
@@ -20,18 +27,10 @@ debug
 }
 
 /* 字体 */
-.my-font {
-  font-weight: bold !important;
-  font-family: 等线 !important;
+.my-heading {
   font-size: 1.1rem;
-}
-
-.my-big-font {
-  font-size: 1.3rem !important;
-}
-
-.my-white-font {
-  color: white !important;
+  font-weight: bold;
+  color: #1A1A1A;
 }
 
 .my-inline-label::before {
@@ -50,17 +49,6 @@ debug
   display: inline-block;
 }
 
-.my-title {
-  padding: 1.7rem 0 1rem 1rem;
-  font-size: 1.3rem;
-}
-
-.my-subtitle {
-  font-size: 1rem;
-  color: #8C8C8C;
-  font-weight: 700;
-}
-
 /* 对齐方式 */
 .my-even-table {
   display: flex;
@@ -77,42 +65,23 @@ debug
   justify-content: space-around;
 }
 
-/* 标签 */
-.my-tag {
-  display: block !important;
-  margin-left: 0.5rem;
-  font-size: 1rem;
-}
-
 /* 背景色 */
-.my-header-background {
-  background: linear-gradient(180deg, #07D686 0%, #07D686 40%, rgba(38, 244, 164, 0) 100%) !important;
-  height: 43.3%;
-  width: 100vw;
-  position: fixed;
-  z-index: -1;
-}
-
-.my-header-background-white {
-  background-color: white !important;
-  height: 11.75rem;
-  width: 100vw;
-  position: fixed;
-  z-index: -1;
-}
-
 .my-underground {
-  background-color: #F5F5F5;
+  background-color: #F3F4F8;
   height: 100vh;
   width: 100vw;
   position: fixed;
+  top: 0;
   z-index: -2;
 }
 
-.white-container {
-  background-color: white;
-  border-radius: 0.5rem;
-  padding: 0.5rem;
+.my-underground-purple {
+  background-color: #F7F6FB;
+  height: 100vh;
+  width: 100vw;
+  position: fixed;
+  top: 0;
+  z-index: -2;
 }
 
-/* Fred 20221129 */
+/* Fred */

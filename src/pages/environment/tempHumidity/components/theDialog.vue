@@ -53,7 +53,6 @@
 
 <script setup>
 //框架引入
-import Taro from "@tarojs/taro";
 import {
   reactive,
   watch,
@@ -68,16 +67,8 @@ import {
 //组件引入
 import closeImg from "../../../../assets/icon_close.png";
 
-definePageConfig({
-  navigationStyle: "custom",
-  usingComponents: {
-    "van-popup": "@vant/weapp/popup/index",
-    "van-action-sheet": "@vant/weapp/action-sheet/index",
-  },
-});
-
 //父系入参
-const { onNav, onNavBack } = globalThis.app;
+const { onNav, onNavBack, globalData } = globalThis.app;
 
 const props = defineProps({
   globalObj: Object,

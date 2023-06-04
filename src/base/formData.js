@@ -1,4 +1,4 @@
-const mimeMap = require('./mimeMap.js')
+import mimeMap from './mimeMap.js';
 
 function FormData() {
   let data = {};
@@ -12,7 +12,7 @@ function FormData() {
   this.appendFile = (name, buffer, path, fileName) => {
     /* let {
       getFileSystemManager
-    } = wx;
+    } = uni;
     let fileManager = getFileSystemManager();
     let buffer = fileManager.readFileSync(path);
     if (Object.prototype.toString.call(buffer).indexOf("ArrayBuffer") < 0) {
@@ -156,4 +156,4 @@ String.prototype.utf8CodeAt = function (i) {
 };
 
 
-module.exports = FormData;
+export default FormData;

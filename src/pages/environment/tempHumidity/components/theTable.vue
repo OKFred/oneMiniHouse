@@ -31,7 +31,6 @@
 
 <script setup>
 //框架引入
-import Taro from "@tarojs/taro";
 import {
   reactive,
   watch,
@@ -44,13 +43,6 @@ import {
 } from "vue";
 
 //组件引入
-
-definePageConfig({
-  navigationStyle: "custom",
-  usingComponents: {
-    "van-action-sheet": "@vant/weapp/action-sheet/index",
-  },
-});
 
 //父系入参
 const props = defineProps({

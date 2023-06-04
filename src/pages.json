@@ -1,0 +1,71 @@
+{
+    "pages": [
+        {
+            "path": "pages/index/index"
+        },
+        {
+            "path": "pages/mine/index"
+        }
+    ],
+    "subPackages": [
+        {
+            "root": "pages/expense",
+            "pages": [
+                {
+                    "path": "electricity/index"
+                }
+            ]
+        },
+        {
+            "root": "pages/environment",
+            "pages": [
+                {
+                    "path": "mix/index"
+                },
+                {
+                    "path": "tempHumidity/index"
+                },
+                {
+                    "path": "sound/index"
+                },
+                {
+                    "path": "light/index"
+                }
+            ]
+        }
+    ],
+    "easycom": {
+        "custom": {
+            "^u-(.*)": "uview-plus/components/u-$1/u-$1.vue"
+        }
+    },
+    "globalStyle": {
+        "navigationStyle": "custom",
+        "usingComponents": {}
+    },
+    "tabBar": {
+        "color": "#ACACAC",
+        "selectedColor": "#181818",
+        "iconWidth": "24px",
+        "fontSize": "15px",
+        "list": [
+            {
+                "pagePath": "pages/index/index",
+                "iconPath": "/src/static/tabbar/home_unselected.svg",
+                "selectedIconPath": "/src/static/tabbar/home_selected.svg",
+                "text": "首页"
+            },
+            {
+                "pagePath": "pages/mine/index",
+                "iconPath": "/src/static/tabbar/me_unselected.svg",
+                "selectedIconPath": "/src/static/tabbar/me_selected.svg",
+                "text": "我的"
+            }
+        ]
+    },
+    "permission": {
+        "scope.userLocation": {
+            "desc": "位置用于用户主动选择所在位置"
+        }
+    }
+}

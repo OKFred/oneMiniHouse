@@ -1,5 +1,5 @@
 <template>
-  <myfooters>
+  <myFooter>
     <template #myFooterSlot>
       <view slot="myFooterSlot" class="my-center my-center-vertically my-around-table" style="width: 100%">
         <view style="width: 88vw" @tap="onCancel">
@@ -7,12 +7,11 @@
         </view>
       </view>
     </template>
-  </myfooters>
+  </myFooter>
 </template>
 
 <script setup>
 //框架引入
-import Taro from "@tarojs/taro";
 import {
   reactive,
   watch,
@@ -25,18 +24,12 @@ import {
 } from "vue";
 
 //组件引入
-import myfooters from "@/src/components/myfooters/index.vue"; //引入组件
-import mybuttond from "@/src/components/mybuttond/index.vue"; //引入组件
-
-definePageConfig({
-  navigationStyle: "custom",
-  usingComponents: {
-    "van-button": "@vant/weapp/button/index",
-  },
-});
+import myFooter from "/src/components/my-footer/index.vue"; //引入组件
+import mybuttond from "/src/components/mybuttond/index.vue"; //引入组件
 
 //父系入参
-const { onNav, onNavBack } = globalThis.app;
+const { onNav, onNavBack, globalData } = globalThis.app;
+
 
 const props = defineProps({
   localObj: Object,

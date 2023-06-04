@@ -1,8 +1,0 @@
-
-/* 主按钮 */
-.my-botton-circled {
-flex-direction: column; border-radius: 50%; height: 10rem; width: 10rem; font-size: 1.5rem !important; border: 0 !important; box-shadow:  0 0.1rem 0.5rem 0.1rem #D8E9FE; background: linear-gradient(to right, #78AFF2, #348EFB) !important; color: white !important;
-}
-.my-subtitle {
-  font-size: 1rem; color: #8C8C8C; font-weight: 700;
-}

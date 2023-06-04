@@ -1,5 +1,5 @@
 <template>
-  <myheaderd :parentObj="localObj" />
+  <myHeader :parentObj="localObj" />
   <view class="my-underground" />
   <view style="padding-top: 5.4rem" />
   <mytabd :parentObj="localObj.tabs" class="my-top-tab" />
@@ -7,7 +7,6 @@
 
 <script setup>
 //框架引入
-import Taro from "@tarojs/taro";
 import {
   reactive,
   watch,
@@ -20,17 +19,12 @@ import {
 } from "vue";
 
 //组件引入
-import myheaderd from "@/src/components/myheaderd/index.vue";
-import mytabd from "@/src/components/mytabd/index.vue";
-
-definePageConfig({
-  navigationStyle: "custom",
-  usingComponents: {
-  },
-});
+import myHeader from "/src/components/my-header/index.vue";
+import mytabd from "/src/components/mytabd/index.vue";
 
 //父系入参
-const { onNav, onNavBack } = globalThis.app;
+const { onNav, onNavBack, globalData } = globalThis.app;
+
 
 const props = defineProps({
   localObj: Object,

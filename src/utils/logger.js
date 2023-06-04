@@ -1,8 +1,7 @@
-import Taro from "@tarojs/taro";
+const fs = uni.getFileSystemManager();
 
-const fs = Taro.getFileSystemManager();
 let main = (() => {
-    let filePath = Taro.env.USER_DATA_PATH;
+    let filePath = uni.env.USER_DATA_PATH;
     let writeLog = ({ fileName, data } = {}) => {
         let today = new Date().Format("yyyy-MM-dd");
         let now = new Date().toLocaleTimeString();

@@ -1,7 +1,0 @@
-<image class="my-header-image" src="/assets/header-{{ headerColor }}.png" style="width: 100%" mode="widthFix" />
-<view class="my-header">
-  <view class="my-center">
-    <view class="my-font {{ headerColor !== 'white' ? 'my-white-font' : '' }}">{{ pageName }}</view>
-  </view>
-</view>
-<van-icon wx:if="{{ showBackButton }}" class="my-header-navback {{ headerColor !== 'white' ? 'my-white-font' : '' }}" name="arrow-left" bind:tap="onNavback" />

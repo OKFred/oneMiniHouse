@@ -1,68 +1,70 @@
-"use strict";
-import router from "./router/index"; //自定义路由
-
-function pageFinder() {
-  let pages = router
-    .filter((obj) => !obj.root)
-    .map((obj) => obj.url.replace(/^\//, "")); //主包页面
-  let subpackages = [];
-  for (let obj of router) {
-    if (!obj.root || subpackages.find((str) => str === obj.root)) continue;
-    subpackages.push(obj.root);
-  } //先拿到分包的数量
-  let subpagesFinder = (rootReg) =>
-    router
-      .filter((obj) => {
-        let condition = rootReg.test(obj.url);
-        if (condition) obj.url = obj.url.replace(rootReg, "");
-        return condition;
-      })
-      .map((obj) => obj.url);
-  subpackages = subpackages.map((root) => {
-    let roots = root.split("/");
-    let rootReg = new RegExp(`\^\/${roots.join(`\/`)}\/`, "gi");
-    let pages = subpagesFinder(rootReg);
-    return {
-      root,
-      pages,
-    };
-  });
-  return {
-    pages,
-    subpackages,
-  };
-} //在路由表里找到所有匹配的页面
+// 该文件为uni-app的全局配置文件，用于配置整个应用
+import myApp from "./app.data.js";
 
 export default {
-  ...pageFinder(),
-  window: {
-    backgroundTextStyle: "light",
-    navigationBarBackgroundColor: "#fff",
-    // navigationBarTitleText: "WeChat",
-    navigationBarTextStyle: "black",
-    navigationStyle: "custom",
-  },
-  usingComponents: {
-    "van-icon": "@vant/weapp/icon/index",
-    "van-field": "@vant/weapp/field/index",
-    "van-cell": "@vant/weapp/cell/index",
-    "van-cell-group": "@vant/weapp/cell-group/index",
-    "van-swipe-cell": "@vant/weapp/swipe-cell/index",
-    "van-popup": "@vant/weapp/popup/index",
-    "van-action-sheet": "@vant/weapp/action-sheet/index",
-    "van-dialog": "@vant/weapp/dialog/index",
-  },
-  tabBar: {
-    custom: true,
-    list: [
-      {
-        pagePath: "pages/index/index",
-        text: "首页",
-      },
-      {
-        pagePath: "pages/mine/index",
-        text: "我的",
-      },
-    ],
-  },
+    data() {
+        return {
+            //设置默认的分享参数
+            //如果页面不设置share，就触发这个默认的分享
+            share: {
+                title: myApp.globalData.appPublicName, //自定义标题
+                path: `/pages/index/index`, //默认跳转首页
+                imageUrl: "", //可设置默认分享图，不设置默认截取头部5:4
+            },
+        };
+    },
+    onShareAppMessage(res) {
+        //发送给朋友
+        let that = this;
+        // 动态获取当前页面栈
+        let pages = getCurrentPages(); //获取所有页面栈实例列表
+        let nowPage = pages[pages.length - 1]; //当前页页面实例
+        // let prevPage = pages[pages.length - 2]; //上一页页面实例
+        that.share.path = `/${nowPage.route}`;
+        return {
+            title: this.share.title,
+            path: this.share.path,
+            imageUrl: this.share.imageUrl,
+            success(res) {
+                console.log("success(res)==", res);
+                uni.showToast({
+                    title: "分享成功",
+                });
+            },
+            fail(res) {
+                console.log("fail(res)==", res);
+                uni.showToast({
+                    title: "分享失败",
+                    icon: "none",
+                });
+            },
+        };
+    },
+    onShareTimeline(res) {
+        //分享到朋友圈
+        let that = this;
+        // 动态获取当前页面栈
+        let pages = getCurrentPages(); //获取所有页面栈实例列表
+        let nowPage = pages[pages.length - 1]; //当前页页面实例
+        // let prevPage = pages[pages.length - 2]; //上一页页面实例
+        that.share.path = `/${nowPage.route}`;
+        return {
+            title: this.share.title,
+            path: this.share.path,
+            imageUrl: this.share.imageUrl,
+            success(res) {
+                console.log("success(res)==", res);
+                uni.showToast({
+                    title: "分享成功",
+                });
+            },
+            fail(res) {
+                console.log("fail(res)==", res);
+                uni.showToast({
+                    title: "分享失败",
+                    icon: "none",
+                });
+            },
+        };
+    },
 };

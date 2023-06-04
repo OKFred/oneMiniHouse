@@ -12,7 +12,7 @@
       </van-cell>
     </van-cell-group>
     <slot-view :name="'right'">
-      <view class="my-center my-font my-white-font my-swipe-button">
+      <view class="my-center my-swipe-button" style="color: white; font-size: 1rem;">
         <view class="my-center my-center-vertically" style="background-color: #fa5151; width: 100px">
           修改
         </view>
@@ -26,7 +26,6 @@
 
 <script setup>
 //框架引入
-import Taro from "@tarojs/taro";
 import {
   reactive,
   watch,
@@ -40,17 +39,8 @@ import {
 
 //组件引入
 
-definePageConfig({
-  navigationStyle: "custom",
-  usingComponents: {
-    "van-cell": "@vant/weapp/cell/index",
-    "van-cell-group": "@vant/weapp/cell-group/index",
-    "van-swipe-cell": "@vant/weapp/swipe-cell/index",
-  },
-});
-
 //父系入参
-const { onNav, onNavBack } = globalThis.app;
+const { onNav, onNavBack, globalData } = globalThis.app;
 
 const props = defineProps({
   parentObj: Object,

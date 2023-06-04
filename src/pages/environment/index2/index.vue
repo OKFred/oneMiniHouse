@@ -1,5 +1,5 @@
 <template>
-  <myheaderd pageName="智能家居" />
+  <myHeader pageName="智能家居" />
   <mycontents>
     <slot-view :name="'myContentSlot'" style="margin-top: 5rem; margin-bottom: 5rem">
       <view class="my-center-vertically" style="margin-bottom: 1.5rem">
@@ -61,7 +61,6 @@
 
 <script setup>
 //模块引入
-import Taro from "@tarojs/taro";
 import {
   reactive,
   watch,
@@ -85,16 +84,7 @@ import meterPower from "../electricity/logics/meterPower.js";
 const props = defineProps({
   globalObj: Object,
 });
-definePageConfig({
-  navigationBarTitleText: "首页",
-  navigationStyle: "custom",
-  usingComponents: {
-    "van-button": "@vant/weapp/button/index",
-    "myheaderd": "@/src/components/myheaderd/index",
-    "mycontents": "@/src/components/mycontents/index",
-    "mybuttond": "@/src/components/mybuttond/index"
-  },
-});
+
 const hotWetQueryHex = sensorHotWet.hotWetQuery();
 const mixQueryHex = sensorMix.mixQuery();
 const lightQueryHex = sensorLight.lightQuery();

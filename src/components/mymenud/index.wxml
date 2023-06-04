@@ -1,8 +1,0 @@
-<image style="margin-top: 1rem; width: 100%" src="https://cloud.trustai.cn/ftp/tonghai-farmer-assistant/lengku/banner.png" mode="widthFix" />
-<!-- 展示三列 -->
-<view class="my-col-3">
-  <view wx:for="{{ menuArr }}" wx:key="index" bind:tap="onNav" data-obj="{{ item }}" class="my-menu my-center my-center-vertically">
-    <van-image width="60" height="60" src="{{ item.src }}" />
-    <view style="margin-top: 0.5rem;" class="my-font">{{ item.label }}</view>
-  </view>
-</view>

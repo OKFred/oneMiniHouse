@@ -1,3 +1,0 @@
-<view class="my-footer my-around-table" style="height: 6.8vh;">
-  <slot name="myFooterSlot" />
-</view>

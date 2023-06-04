@@ -30,7 +30,6 @@
 
 <script setup>
 //框架引入
-import Taro from "@tarojs/taro";
 import {
   reactive,
   watch,
@@ -43,18 +42,10 @@ import {
 } from "vue";
 
 //组件引入
-import mytabd from "@/src/components/mytabd/index.vue";
-
-definePageConfig({
-  navigationStyle: "custom",
-  usingComponents: {
-    "van-tab": "@vant/weapp/tab/index",
-    "van-tabs": "@vant/weapp/tabs/index",
-  },
-});
+import mytabd from "/src/components/mytabd/index.vue";
 
 //父系入参
-const { onNav, onNavBack } = globalThis.app;
+const { onNav, onNavBack, globalData } = globalThis.app;
 
 const props = defineProps({
   localObj: Object,

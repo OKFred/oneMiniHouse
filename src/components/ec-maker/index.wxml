@@ -1,3 +1,0 @@
-<view class="ec-container">
-  <ec-canvas canvas-id="echart" id="echart" force-use-old-canvas="true" ec="{{ ec }}"></ec-canvas>
-</view>

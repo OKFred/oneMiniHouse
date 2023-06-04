@@ -6,7 +6,7 @@
     <slot :localObj="localObj" name="datePicker">
       <button>请选择日期</button>
     </slot>
-    <text v-show="parentObj.debug" class="my-inline-text my-ellipsis">
+    <text v-if="parentObj.debug" class="my-inline-text my-ellipsis">
       {{ localObj.formObj.date || "请选择日期" }}
     </text>
   </picker>
@@ -17,7 +17,7 @@
     <slot :localObj="localObj" name="timePicker">
       <button>请选择时间</button>
     </slot>
-    <text v-show="parentObj.debug" class="my-inline-text my-ellipsis">
+    <text v-if="parentObj.debug" class="my-inline-text my-ellipsis">
       {{ localObj.formObj.time || "请选择时间" }}
     </text>
   </picker>
@@ -34,7 +34,7 @@
     <slot :localObj="localObj" name="regionPicker">
       <button>请选择地区</button>
     </slot>
-    <text class="my-inline-text my-ellipsis my-region-text" v-show="parentObj.debug">
+    <text class="my-inline-text my-ellipsis my-region-text" v-if="parentObj.debug">
       <text v-for="(item, index) in localObj.formObj.region" :key="index">
         {{ item }}{{ index !== 2 ? "," : "" }}
       </text>
@@ -44,7 +44,6 @@
 
 <script setup>
 //框架引入
-import Taro from "@tarojs/taro";
 import {
   reactive,
   watch,
@@ -58,12 +57,8 @@ import {
 
 //组件引入
 
-definePageConfig({
-  navigationStyle: "custom",
-  usingComponents: {},
-});
 //父系入参
-const { onNav, onNavBack } = globalThis.app;
+const { onNav, onNavBack, globalData } = globalThis.app;
 
 const props = defineProps({
   parentObj: {

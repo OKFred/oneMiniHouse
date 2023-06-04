@@ -1,7 +1,0 @@
-{
-    "usingComponents": {
-        "myfooters": "/components/myfooters/index"
-    },
-    "navigationStyle": "custom",
-    "component": true
-}

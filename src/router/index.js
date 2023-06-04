@@ -27,4 +27,9 @@ export default [
     url: "/pages/environment/sound/index",
     root: "pages/environment",
   },
+  {
+    name: "环境-光照",
+    url: "/pages/environment/light/index",
+    root: "pages/environment",
+  },
 ];

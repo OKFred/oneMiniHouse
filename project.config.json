@@ -1,41 +1,28 @@
 {
-  "miniprogramRoot": "dist/",
-  "projectname": "oneMiniHouse",
-  "description": "miniHouse",
-  "appid": "wxa98cbd791e541e62",
-  "setting": {
-    "packNpmManually": true,
-    "packNpmRelationList": [
-      {
-        "packageJsonPath": "./package.json",
-        "miniprogramNpmDistDir": "./"
-      }
-    ],
-    "urlCheck": true,
-    "es6": false,
-    "enhance": false,
-    "compileHotReLoad": false,
-    "postcss": false,
-    "minified": true,
-    "babelSetting": {
-      "ignore": [],
-      "disablePlugins": [],
-      "outputPath": ""
+    "appid": "wxa98cbd791e541e62",
+    "compileType": "miniprogram",
+    "libVersion": "2.32.0",
+    "packOptions": {
+        "ignore": [],
+        "include": []
     },
-    "minifyWXSS": true,
-    "minifyWXML": true,
-    "ignoreUploadUnusedFiles": true
-  },
-  "compileType": "miniprogram",
-  "srcMiniprogramRoot": "dist/",
-  "condition": {},
-  "editorSetting": {
-    "tabIndent": "insertSpaces",
-    "tabSize": 2
-  },
-  "packOptions": {
-    "ignore": [],
-    "include": []
-  },
-  "libVersion": "2.29.0"
+    "setting": {
+        "coverView": true,
+        "es6": true,
+        "postcss": true,
+        "minified": true,
+        "enhance": true,
+        "showShadowRootInWxmlPanel": true,
+        "packNpmRelationList": [],
+        "babelSetting": {
+            "ignore": [],
+            "disablePlugins": [],
+            "outputPath": ""
+        }
+    },
+    "condition": {},
+    "editorSetting": {
+        "tabIndent": "insertSpaces",
+        "tabSize": 4
+    }
 }

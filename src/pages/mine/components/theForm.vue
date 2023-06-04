@@ -8,7 +8,6 @@
 
 <script setup>
 //框架引入
-import Taro from "@tarojs/taro";
 import {
   reactive,
   watch,
@@ -20,18 +19,16 @@ import {
   defineProps,
 } from "vue";
 
-//组件引入
-import myCardsListd from "@/src/components/mycards-listd/index.vue"; //引入组件
-import mineAPI from "./api.js"; //数据读写操作
-import bg from "@/src/main/bg.js";
+import { onLoad, onShow } from "@dcloudio/uni-app";
 
-definePageConfig({
-  navigationStyle: "custom",
-  usingComponents: {},
-});
+//组件引入
+import myCardsListd from "/src/components/mycards-listd/index.vue"; //引入组件
+
+import mineAPI from "./api.js"; //数据读写操作
+import bg from "/src/main/bg.js";
 
 //父系入参
-const { onNav, onNavBack } = globalThis.app;
+const { onNav, onNavBack, globalData } = globalThis.app;
 
 const props = defineProps({
   globalObj: Object,

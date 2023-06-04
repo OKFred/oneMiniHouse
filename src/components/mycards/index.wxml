@@ -1,3 +1,0 @@
-<view class="my-card">
-  <slot name="myCardSlot" />
-</view>

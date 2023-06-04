@@ -1,7 +1,0 @@
-{
-    "usingComponents": {
-        "van-button": "@vant/weapp/button/index"
-    },
-    "navigationStyle": "custom",
-    "component": true
-}

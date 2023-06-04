@@ -1,9 +1,0 @@
-{
-    "usingComponents": {
-        "mycards": "/components/mycards/index",
-        "van-field": "@vant/weapp/field/index",
-        "van-icon": "@vant/weapp/icon/index"
-    },
-    "navigationStyle": "custom",
-    "component": true
-}

@@ -1,3 +1,0 @@
-<van-tabs wx:if="{{ currentTab !== undefined }}" ellipsis='{{false}}' model:active="{{ currentTab }}" bind:change="onTabChange" class="my-tab-area" custom-class="my-header-tab" tab-active-class="my-active-tab" tab-class="my-tab" color="#318CFB">
-  <van-tab wx:for="{{ tabArr }}" wx:key="index" title="{{ item.label }}" info="{{ item.value }}" />
-</van-tabs>

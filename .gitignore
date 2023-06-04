@@ -1,10 +1,25 @@
-dist/
-deploy_versions/
-.temp/
-.rn_temp/
-node_modules/
 .DS_Store
+node_modules
+/dist
+/mtk/url.js
 package-lock.json
-project.private.config.json
-src/project.private.config.json
-src/components/vant-weapp/
+/src/wxcomponents
+ 
+# local env files
+.env.local
+.env.*.local
+env.json
+ 
+# Log files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+ 
+# Editor directories and files
+.idea
+.vscode
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

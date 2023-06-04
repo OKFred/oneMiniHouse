@@ -1,7 +1,0 @@
-{
-    "usingComponents": {
-        "van-image": "@vant/weapp/image/index"
-    },
-    "navigationStyle": "custom",
-    "component": true
-}

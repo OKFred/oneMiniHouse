@@ -5,7 +5,6 @@
 
 <script setup>
 //框架引入
-import Taro from "@tarojs/taro";
 import {
   reactive,
   watch,
@@ -18,16 +17,11 @@ import {
 } from "vue";
 
 //组件引入
-import myplated from "@/src/components/myplated/index.vue"  //引入组件
-
-definePageConfig({
-  navigationStyle: "custom",
-  usingComponents: {
-  },
-});
+import myplated from "/src/components/myplated/index.vue"  //引入组件
 
 //父系入参
-const { onNav, onNavBack } = globalThis.app;
+const { onNav, onNavBack, globalData } = globalThis.app;
+
 
 const props = defineProps({
   localObj: Object,

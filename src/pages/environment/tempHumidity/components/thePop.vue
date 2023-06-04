@@ -28,7 +28,6 @@
 
 <script setup>
 //框架引入
-import Taro from "@tarojs/taro";
 import {
   reactive,
   watch,
@@ -42,23 +41,8 @@ import {
 
 //组件引入
 
-definePageConfig({
-  navigationStyle: "custom",
-  usingComponents: {
-    "van-tab": "@vant/weapp/tab/index",
-    "van-tabs": "@vant/weapp/tabs/index",
-    "van-icon": "@vant/weapp/icon/index",
-    "van-field": "@vant/weapp/field/index",
-    "van-image": "@vant/weapp/image/index",
-    "van-button": "@vant/weapp/button/index",
-    "van-search": "@vant/weapp/search/index",
-    "van-popup": "@vant/weapp/popup/index",
-    "van-datetime-picker": "@vant/weapp/datetime-picker/index"
-  },
-});
-
 //父系入参
-const { onNav, onNavBack } = globalThis.app;
+const { onNav, onNavBack, globalData } = globalThis.app;
 
 const props = defineProps({
   localObj: Object,
