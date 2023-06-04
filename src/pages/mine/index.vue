@@ -1,15 +1,16 @@
 <template>
-  <myUview :globalObj="globalObj" />
-  <myHeader :parentObj="localObj" />
-  <view class="my-underground" />
-  <myContent>
-    <template #myContentSlot>
-      <view style="margin-top: 5rem" />
-      <view class="my-font">设置</view>
-      <view style="margin-top: 1rem" />
-      <theForm :localObj="localObj" />
+  <myUview :globalObj="globalObj" v-if="localObj.pageShow" />
+  <myHeader :parentObj="localObj">
+    <template #myHeaderSlot>
+      <view style="padding-top: 45px" v-if="globalData['平台'] === '嵌入网页'" />
+      <theProfile :localObj="localObj" />
     </template>
-  </myContent>
+  </myHeader>
+  <view style="z-index: 12; position: relative; background: #F3F4F8; border-radius: 1rem 1rem 0 0;">
+    <view style="padding-top: 1vh;" />
+    <theForm :localObj="localObj" />
+    <view style="padding-bottom: 70vh;" />
+  </view>
 </template>
 
 <script setup>
@@ -24,19 +25,18 @@ import {
   onUpdated,
   defineProps,
 } from "vue";
+import { onShow, onHide } from "@dcloudio/uni-app";
 
-import { onLoad, onShow } from "@dcloudio/uni-app";
+import { serverQuery, serverSaveQuery } from "./components/data.js";
 
 //组件引入
 import myUview from "/src/components/my-uview/index.vue";
 import myHeader from "/src/components/my-header/index.vue";
-import myContent from "/src/components/my-content/index.vue";
-
+import theProfile from "./components/theProfile.vue";
 import theForm from "./components/theForm.vue"; //引入自定义组件
 
 //父系入参
 const { onNav, onNavBack, globalData } = globalThis.app;
-
 
 const props = defineProps({
   globalObj: Object,
@@ -49,18 +49,21 @@ onMounted(() => {
 //本地变量和函数
 let localObj = reactive({
   pageName: "我的",
-  headerColor: "white",
+  headerColor: "navyblue",
+  hidePageName: globalData['平台'] === '嵌入网页',
+  fn: {
+    serverQuery,
+    serverSaveQuery,
+  }
 });
-/*
-watch(
-    () => props.globalObj.msgs[localObj.name],
-    (newValue, oldValue) => {
-        if (newValue) distribute(newValue)
-    },
-    { immediate: true },
-) //处理来自App.vue的消息分发 */
+
+onShow(async () => {
+  localObj.pageShow = true;
+})
+onHide(() => {
+  localObj.pageShow = false;
+})
+
 </script>
 
-<style>
-
-</style>
+<style></style>

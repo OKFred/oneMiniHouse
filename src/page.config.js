@@ -56,14 +56,14 @@ function uniPageMaker(pageObj) {
             list: [
                 {
                     pagePath: "pages/index/index",
-                    iconPath: "static/tabbar/icon_tab_home_n.png",
-                    selectedIconPath: "static/tabbar/icon_tab_home_h.png",
+                    iconPath: "/src/static/tabbar/home_unselected.svg",
+                    selectedIconPath: "/src/static/tabbar/home_selected.svg",
                     text: "首页",
                 },
                 {
                     pagePath: "pages/mine/index",
-                    iconPath: "static/tabbar/icon_tab_me_n.png",
-                    selectedIconPath: "static/tabbar/icon_tab_me_h.png",
+                    iconPath: "/src/static/tabbar/me_unselected.svg",
+                    selectedIconPath: "/src/static/tabbar/me_selected.svg",
                     text: "我的",
                 },
             ],
