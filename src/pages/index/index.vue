@@ -46,7 +46,7 @@ const props = defineProps({
 //本地变量和函数
 let localObj = reactive({
   pageName: "首页",
-  headerColor: "navyblue",
+  headerColor: "#9acafc",
   titleStyle: "color: white !important;",
   // showBackButton: true,
   hidePageName: globalData['平台'] === '嵌入网页',

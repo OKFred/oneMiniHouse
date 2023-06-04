@@ -49,7 +49,7 @@ onMounted(() => {
 //本地变量和函数
 let localObj = reactive({
   pageName: "我的",
-  headerColor: "navyblue",
+  headerColor: "#9acafc",
   hidePageName: globalData['平台'] === '嵌入网页',
   fn: {
     serverQuery,

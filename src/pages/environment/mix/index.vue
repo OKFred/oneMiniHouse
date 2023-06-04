@@ -50,7 +50,7 @@ const props = defineProps({
 //本地变量和函数
 let localObj = reactive({
   pageName: "综合检测",
-  headerColor: "navyblue",
+  headerColor: "#9acafc",
   titleStyle: "color: black !important;",
   showBackButton: true,
   pageShow: false,
