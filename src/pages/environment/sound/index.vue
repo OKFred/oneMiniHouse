@@ -6,11 +6,11 @@
     </template>
   </myHeader>
   <view class="my-underground-purple" />
-  <view v-if="localObj.tabs?.currentTab === '文本'">
+  <view v-show="localObj.tabs?.currentTab === '文本'">
     <view style="margin-top: 1vh" />
     <theForm :localObj="localObj" />
   </view>
-  <view v-else-if="localObj.tabs?.currentTab === '图表'">
+  <view v-show="localObj.tabs?.currentTab === '图表'">
     <view style="margin-top: 1vh" />
     <theChart :localObj="localObj" />
   </view>
@@ -56,6 +56,7 @@ let localObj = reactive({
   pageShow: false,
   fn: {},
 });
+
 onShow(async () => {
   localObj.pageShow = true;
 });

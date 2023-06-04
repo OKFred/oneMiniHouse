@@ -46,7 +46,9 @@ function uniPageMaker(pageObj) {
         },
         globalStyle: {
             navigationStyle: "custom",
-            usingComponents: {},
+            usingComponents: {
+                "ec-canvas": "/wxcomponents/ec-canvas/ec-canvas",
+            },
         },
         tabBar: {
             color: "#ACACAC",

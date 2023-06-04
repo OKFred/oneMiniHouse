@@ -2,9 +2,12 @@
   <view class="ec-container">
     <ec-canvas canvas-id="echart" id="echart" ref="echart" :ec="localObj.echartObj.ec" />
   </view>
-  <view style="margin-top: 1rem" />
+  <view style="margin-top: 1vh" />
   <view style="width: 100%" @tap="onToggleGraph">
-    <!-- <mybuttond :parentObj="localObj.echartObj.buttons" /> -->
+    <u-button
+      :customStyle="`width: 88vw; height: 5vh; background-color: ${localObj.echartObj.buttons.color}; color: white; border-radius: 0.25rem; font-size: 1rem;`">
+      {{ localObj.echartObj.buttons.text }}
+    </u-button>
   </view>
 </template>
 
@@ -19,11 +22,12 @@ import {
   onActivated,
   onDeactivated,
   onUpdated,
+  getCurrentInstance,
   defineProps,
 } from "vue";
 
 //组件引入
-// import echarts from "/src/components/ec-canvas/echarts.js"; //引入组件
+// import * as echarts from "/src/components/ec-canvas/echarts.js"; //引入组件
 
 //父系入参
 const { onNav, onNavBack, globalData } = globalThis.app;
@@ -103,14 +107,21 @@ setData({
     dispose,
     buttons: {
       text: "加载中",
-      color: 'red-plain',
-      size: 'medium'
+      color: '#ff5722',
     },
   }
 });
 
 let graphInterval = null; //定时器
+//echarts中需要用到instance
+let proxy, instance;
 onMounted(() => {
+  instance = getCurrentInstance();
+  proxy = instance.proxy;
+  props.localObj.instance = instance;
+  props.localObj.proxy = proxy;
+  // console.log(instance, proxy);
+  //只有在onMounted中才能获取到instance
   console.log('进入页面')
   graphInterval = setInterval(() => {
     if (props.localObj.echartObj.isPaused) return;
@@ -134,13 +145,11 @@ function onToggleGraph() {
   console.log('图表状态切换');
   props.localObj.echartObj.isPaused = !props.localObj.echartObj.isPaused;
   props.localObj.echartObj.buttons.text = props.localObj.echartObj.isPaused ? '已暂停' : '加载中';
-  props.localObj.echartObj.buttons.color = props.localObj.echartObj.isPaused ? 'blue-plain' : 'red-plain';
+  props.localObj.echartObj.buttons.color = props.localObj.echartObj.isPaused ? '#03a9f4' : '#ff5722';
 }
 
 function initChart() {
-  if (!uni.getCurrentInstance) return console.log('非小程序环境');
-  const current = uni.getCurrentInstance()
-  let myChart = current.page.selectComponent('#echart');
+  let myChart = instance.refs['echart'];
   if (!myChart) return console.log('图表不存在或者未识别')
   myChart.init((canvas, width, height) => {
     const chart = echarts.init(canvas, null, {
