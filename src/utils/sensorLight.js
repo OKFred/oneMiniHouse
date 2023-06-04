@@ -6,11 +6,9 @@ let main = (() => {
   let generalLength = 18;
 
   function lightQuery() {
-    let targetMemory = "0000";
+    let targetMemory = "0002";
     let byteRead = "0002";
-    return deviceAddress + codeRead + targetMemory + byteRead;
-    return "21030002000262AB"; //地址21，功能码03，起始地址0000，读取字节数0002，CRC校验码62AB
-    
+    return deviceAddress + codeRead + targetMemory + byteRead;    
   } //光照传感器查询指令
 
   //然后应该会回复16进制数据，如：01 03 04 0000 05A7 B8D9
