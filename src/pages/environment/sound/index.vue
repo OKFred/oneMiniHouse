@@ -1,16 +1,20 @@
 <template>
-  <myUview :globalObj="globalObj" />
-  <theHeader :localObj="localObj" />
-  <mycontents>
-    <slot-view :name="'myContentSlot'" style="margin: 0 0 7rem 0" v-show="localObj.tabs?.currentTab === '文本'">
-      <view style="margin-top: 0.5rem" />
-      <theForm :localObj="localObj" />
-    </slot-view>
-    <slot-view :name="'myContentSlot'" style="margin: 0 0 7rem 0" v-show="localObj.tabs?.currentTab === '图表'">
-      <view style="margin-top: 1rem" />
-      <theChart :localObj="localObj" />
-    </slot-view>
-  </mycontents>
+  <myUview :globalObj="globalObj" v-if="localObj.pageShow" />
+  <myHeader :parentObj="localObj">
+    <template #myHeaderSlot>
+      <theTab :localObj="localObj" />
+    </template>
+  </myHeader>
+  <view class="my-underground-purple" />
+  <view v-if="localObj.tabs?.currentTab === '文本'">
+    <view style="margin-top: 1vh" />
+    <theForm :localObj="localObj" />
+  </view>
+  <view v-else-if="localObj.tabs?.currentTab === '图表'">
+    <view style="margin-top: 1vh" />
+    <theChart :localObj="localObj" />
+  </view>
+  <view style="padding-bottom: 10vh;" />
   <theFooter :localObj="localObj" />
 </template>
 
@@ -21,48 +25,45 @@ import {
   watch,
   computed,
   onMounted,
-  onBeforeUnmount,
   onActivated,
   onDeactivated,
   onUpdated,
   defineProps,
 } from "vue";
+import { onLoad, onShow, onHide, onReachBottom } from "@dcloudio/uni-app";
 
 //组件引入
 import myUview from "/src/components/my-uview/index.vue";
-import theHeader from "./components/theHeader.vue"; //引入自定义组件
-import theFooter from "./components/theFooter.vue"; //引入自定义组件
-import theForm from "./components/theForm.vue"; //引入自定义组件
-import theChart from "./components/theChart.vue"; //引入自定义组件
+import myHeader from "/src/components/my-header/index.vue";
+import theTab from "./components/theTab.vue";
+import theFooter from "./components/theFooter.vue";
+import theForm from "./components/theForm.vue";
+import theChart from "./components/theChart.vue";
 
 //父系入参
 const { onNav, onNavBack, globalData } = globalThis.app;
-
 
 const props = defineProps({
   globalObj: Object,
 });
 
-function setData(obj) {
-  Object.assign(localObj, obj);
-}
-
-async function fetchData() {
-  console.log("📶准备获取数据");
-  console.log(localObj);
-}
-
-//当前项目的所有变量和函数
+//本地变量和函数
 let localObj = reactive({
-  // debug: true,
-  pageName: "智能家居",
-  headerColor: "blue",
-  requestParamObj: {},
-  fetchData,
+  pageName: "音量",
+  headerColor: "navyblue",
+  titleStyle: "color: black !important;",
+  showBackButton: true,
+  pageShow: false,
+  fn: {},
 });
+onShow(async () => {
+  localObj.pageShow = true;
+});
+
+onHide(() => {
+  localObj.pageShow = false;
+})
 
 </script>
 
-<style>
-
-</style>
+<style></style>

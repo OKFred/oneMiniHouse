@@ -4,7 +4,7 @@
   </view>
   <view style="margin-top: 1rem" />
   <view style="width: 100%" @tap="onToggleGraph">
-    <mybuttond :parentObj="localObj.echartObj.buttons" />
+    <!-- <mybuttond :parentObj="localObj.echartObj.buttons" /> -->
   </view>
 </template>
 
@@ -23,8 +23,7 @@ import {
 } from "vue";
 
 //组件引入
-import mybuttond from "/src/components/mybuttond/index.vue"; //引入组件
-import echarts from "/src/components/ec-canvas/echarts.js"; //引入组件
+// import * as echarts from "/src/components/ec-canvas/echarts.js"; //引入组件
 
 //父系入参
 const { onNav, onNavBack, globalData } = globalThis.app;
@@ -181,7 +180,8 @@ function onToggleGraph() {
 }
 
 function initChart() {
-  const current = Taro.getCurrentInstance()
+  if (!uni.getCurrentInstance) return console.log('非小程序环境');
+  const current = uni.getCurrentInstance()
   let myChart = current.page.selectComponent('#echart');
   if (!myChart) return console.log('图表不存在或者未识别')
   myChart.init((canvas, width, height) => {
@@ -197,24 +197,8 @@ function initChart() {
   })
 }
 setTimeout(initChart, 500);
-/*
-let result = {
-      device_address,
-      function_code,
-      byte_read,
-      temperature,
-      humidity,
-      pm_1,
-      pm_2_5,
-      pm_10,
-      co2,
-      o2,
-      ch2o,
-      crc_byte_high,
-      crc_byte_low,
-      query_time,
-      hex,
-    }; */
+
+
 watch(
   () => props.localObj.formCollection['主表单'],
   (newValue, oldValue) => {

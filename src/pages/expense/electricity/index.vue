@@ -49,7 +49,7 @@ const props = defineProps({
 
 //本地变量和函数
 let localObj = reactive({
-  pageName: "智能家居",
+  pageName: "电表",
   headerColor: "navyblue",
   titleStyle: "color: black !important;",
   showBackButton: true,

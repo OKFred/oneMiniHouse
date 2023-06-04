@@ -8,7 +8,7 @@
             返回
           </view>
           <view class="my-center my-center-vertically my-button-default" style="color: white; background: #114FFF;"
-            @tap="onSave()">
+            @tap="onSave()" v-if="false">
             确定
           </view>
         </view>
@@ -61,18 +61,6 @@ function onSave() {
   formObj_main.formArr.forEach((item) => {
     data[item.key] = item.value;
   });
-  data['freezerFeesSaveParam'] = [];
-  let chargeFeeObj = formObj_main.formArr.find(obj => obj.label === '收费标准');
-  let { optionArr, selectArr, inputArr } = chargeFeeObj;
-  for (let i = 0; i < optionArr.length; i++) {
-    let { value } = optionArr[i] || {};
-    if (selectArr.includes(value) && inputArr[i]) {
-      data['freezerFeesSaveParam'].push({
-        feeCycleId: value,
-        fees: inputArr[i]
-      })
-    }
-  }
   props.localObj.fn.loadData({ [fn]: data });
 }
 
