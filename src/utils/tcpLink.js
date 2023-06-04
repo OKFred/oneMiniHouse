@@ -27,6 +27,7 @@ let main = (() => {
 
     async function onTCPConnect({ address, port }) {
         console.log("进行tcp连接");
+        if (!uni.createTCPSocket) return console.log("⚠️当前环境不支持TCP连接");
         tcp.socket = uni.createTCPSocket();
         if (!tcp.socket) return console.log("socket创建失败");
         tcp.socket.connect({ address, port });

@@ -1,9 +1,16 @@
 <template>
   <myFooter>
     <template #myFooterSlot>
-      <view slot="myFooterSlot" class="my-center my-center-vertically my-around-table" style="width: 100%">
-        <view style="width: 88vw" @tap="onCancel">
-          <mybuttond :parentObj="localObj.footers.buttons" />
+      <view class="my-center my-center-vertically my-around-table" style="width: 100%;">
+        <view class="my-far-table" v-if="!localObj.footers.readOnly">
+          <view class="my-center my-center-vertically my-button-default" style="color: #114FFF; background: #FFFFFF;"
+            @tap="onNavBack()">
+            返回
+          </view>
+          <view class="my-center my-center-vertically my-button-default" style="color: white; background: #114FFF;"
+            @tap="onSave()">
+            确定
+          </view>
         </view>
       </view>
     </template>
@@ -25,11 +32,9 @@ import {
 
 //组件引入
 import myFooter from "/src/components/my-footer/index.vue"; //引入组件
-import mybuttond from "/src/components/mybuttond/index.vue"; //引入组件
 
 //父系入参
-const { onNav, onNavBack, globalData } = globalThis.app;
-
+const { onNav, onNavBack } = globalThis.app;
 
 const props = defineProps({
   localObj: Object,
@@ -41,25 +46,41 @@ function setData(obj) {
 
 //本地变量和函数
 setData({
-  // debug: true,
   footers: {
-    buttons: {
-      text: "返回",
-      disabled: false,
-    },
-    // readOnly: true, //只读
   },
 });
 
-function onCancel() {
-  app.onNavBack()
+
+function onSave() {
+  let fn = /更新/.test(props.localObj.pageName) ? "updates" : "adds";
+  let formObj_main = props.localObj.forms.find((item) => item.parent === "主表单");
+  let data = {};
+  if (fn === "updates") {
+    data.id = props.localObj.query.id;
+  }
+  formObj_main.formArr.forEach((item) => {
+    data[item.key] = item.value;
+  });
+  data['freezerFeesSaveParam'] = [];
+  let chargeFeeObj = formObj_main.formArr.find(obj => obj.label === '收费标准');
+  let { optionArr, selectArr, inputArr } = chargeFeeObj;
+  for (let i = 0; i < optionArr.length; i++) {
+    let { value } = optionArr[i] || {};
+    if (selectArr.includes(value) && inputArr[i]) {
+      data['freezerFeesSaveParam'].push({
+        feeCycleId: value,
+        fees: inputArr[i]
+      })
+    }
+  }
+  props.localObj.fn.loadData({ [fn]: data });
 }
 
-function onSubmit() {
-  console.log("提交表单");
-}
 </script>
 
 <style>
-
+.my-button-default {
+  width: 50vw;
+  height: 6vh;
+}
 </style>

@@ -18,7 +18,7 @@
     </view>
     <view class="my-center-vertically my-far-table"
       :style="`${!obj.valueWidth && obj.align === 'left' ? 'width: inherit; ' : obj.labelHidden && obj.editing ? 'width: 100%' : 'width: auto;'}`">
-      <view :style="`color: #ACACAC; ${obj.align === 'left' ? 'width: inherit; ' : 'width: 100%;'}`"
+      <view :style="`color: #ACACAC; ${obj.align === 'left' ? 'width: inherit; ' : 'width: auto;'}`"
         class="my-far-table my-center-vertically" v-if="!obj.editing">
         <view v-if="obj.type === 'realDate'" class="my-far-table my-center-vertically" style="width: 100%">
           <text />

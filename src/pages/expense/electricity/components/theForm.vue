@@ -1,11 +1,11 @@
 <template>
   <!-- 表单 -->
-  <view class="white-container">
-    <myCardsListd :parentObj="localObj.forms[0]" />
+  <view style="background-color: white; padding: 1vh 2vw; margin: 1vh 2vw;">
+    <myForm :parentObj="localObj.forms[0]" />
   </view>
-  <view style="margin-top: 1rem" />
-  <view class="white-container">
-    <myCardsListd :parentObj="localObj.forms[1]" />
+  <view style="margin-top: 1vh" />
+  <view style="background-color: white; padding: 1vh 2vw; margin: 1vh 2vw;">
+    <myForm :parentObj="localObj.forms[1]" />
   </view>
 </template>
 
@@ -24,9 +24,9 @@ import {
 } from "vue";
 
 //组件引入
-import myCardsListd from "/src/components/mycards-listd/index.vue"; //引入组件
+import myForm from "/src/components/my-form/index.vue"; //引入组件
 import modbus from "/src/base/modbus.js";
-import bg from "/src/main/bg.js";
+import bg from "/src/utils/bg.js";
 import tcpLink from "/src/utils/tcpLink.js";
 import meterPower from "/src/utils/meterPower.js";
 
@@ -264,54 +264,18 @@ function setForm(formName, hex) {
 
 function onEdit(params) {
   let { obj, index, parent } = params;
-  let { formArr } = props.localObj.forms.find((obj) => obj.parent === parent);
-  console.log("开始填写表单", obj, index);
-  let { type, option } = obj;
-  if (type === undefined) {
-    return console.log("只读");
-  } else if (type === "plateNumber") {
-    try {
-      Taro.chooseLicensePlate({
-        success: (e) => {
-          console.log(e);
-          formArr[index].value = e.plateNumber;
-        }, fail: (e) => {
-          console.log("用户取消输入", e);
-          formArr[index].value = "";
-        },
-      }); //微信自带车牌号输入模块，根据后端反馈修改 20221029
-    } catch (e) {
-      globalThis.queryResult(false, "请更新微信版本");
-    }
-  } else if (type === "text" || type === "number" || type === "digit") {
-    formArr[index].editing = true;
-  } else if (type === "plateNo") {
-    props.localObj.showPlate = true;
-  } else if (type === "select") {
-    let showOptions = true;
-    let optionArr = props.localObj.options[option];
-    if (!optionArr || optionArr.length === 0) {
-      optionArr = [];
-      globalThis.queryResult(false, "选项缺失");
-    }
-    let optionTarget = { index, parent }; //方便选择之后定位所属的表单项目
-    setData({ showOptions, optionArr, optionTarget, needCalc });
-  } else if (type === "selectArea") {
-    let showArea = true;
-    let optionTarget = { index, parent }; //方便选择之后定位所属的表单项目
-    setData({ showArea, optionTarget });
-  }
+  let formObj = props.localObj.forms.find((obj) => obj.parent === parent);
+  let { formArr } = formObj;
+  // console.log("开始填写表单", obj, index);
+  let { type, option } = obj; //表单类型
 }
-function onEditComplete(params) {
-  let { obj, index, value, parent } = params;
-  let { formArr } = props.localObj.forms.find((obj) => obj.parent === parent);
-  formArr[index].value = value;
-  formArr[index].editing = false;
-  console.log("表单已更新", JSON.parse(JSON.stringify(formArr)));
-  // props.localObj.fetchData();
+
+async function onEditComplete(params) {
+  let { obj, index, value, name, parent } = params;
+  let formObj = props.localObj.forms.find((obj) => obj.parent === parent);
+  let { formArr } = formObj;
+  // console.log("表单已更新", JSON.parse(JSON.stringify(formArr))); 
 }
 </script>
 
-<style>
-
-</style>
+<style></style>
