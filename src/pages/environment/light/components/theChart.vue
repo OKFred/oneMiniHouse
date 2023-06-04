@@ -29,6 +29,10 @@ import {
 //组件引入
 // import * as echarts from "/src/components/ec-canvas/echarts.js"; //引入组件
 
+// #ifdef H5
+import * as echarts from "echarts";
+// #endif
+
 //父系入参
 const { onNav, onNavBack, globalData } = globalThis.app;
 
@@ -43,7 +47,6 @@ function setData(obj) {
 
 //本地变量和函数
 setData({
-  // debug: true,
   echartObj: {
     chart: null,
     ec: {
@@ -150,18 +153,26 @@ function onToggleGraph() {
 
 function initChart() {
   let myChart = instance.refs['echart'];
-  if (!myChart) return console.log('图表不存在或者未识别')
-  myChart.init((canvas, width, height) => {
-    const chart = echarts.init(canvas, null, {
-      width,
-      height,
-    });
-    canvas.setChart(chart);
+  if (!myChart) return console.log('图表不存在或者未识别');
+  if (globalThis.app.globalData['平台'] === '嵌入网页') {
+    let chart = echarts.init(myChart);
     chart.setOption(props.localObj.echartObj.optionObj);
     props.localObj.echartObj.isLoaded = true;
     props.localObj.echartObj.chart = chart;
-    return chart;
-  })
+    return;
+  } else {
+    myChart.init((canvas, width, height) => {
+      const chart = echarts.init(canvas, null, {
+        width,
+        height,
+      });
+      canvas.setChart(chart);
+      chart.setOption(props.localObj.echartObj.optionObj);
+      props.localObj.echartObj.isLoaded = true;
+      props.localObj.echartObj.chart = chart;
+      return chart;
+    })
+  }
 }
 setTimeout(initChart, 500);
 
@@ -199,7 +210,9 @@ watch(
   height: 50vh;
 }
 
-ec-canvas {
+ec-canvas,
+ec-canvas>div {
+  display: inline-block;
   width: 100%;
   height: 100%;
 }
