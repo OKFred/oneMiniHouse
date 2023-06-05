@@ -17,7 +17,7 @@
       </text>
     </view>
     <view class="my-center-vertically my-far-table"
-      :style="`${(!obj.valueWidth && obj.align === 'left') || obj.type === 'textarea' ? 'width: inherit; ' : obj.labelHidden && obj.editing ? 'width: 100%' : 'width: auto;'}`">
+      :style="`${!obj.valueWidth && obj.align === 'left' ? 'width: inherit; ' : obj.labelHidden && obj.editing ? 'width: 100%' : 'width: auto;'}`">
       <view :style="`color: #ACACAC; ${obj.align === 'left' ? 'width: inherit; ' : 'width: auto;'}`"
         class="my-far-table my-center-vertically" v-if="!obj.editing">
         <view v-if="obj.type === 'realDate'" class="my-far-table my-center-vertically" style="width: 100%">
@@ -202,7 +202,7 @@
             ...e.detail,
             parent: parentObj.parent,
           })
-          " autoHeight :count="obj.maxLength" :maxlength="obj.maxLength || -1" />
+          " autoHeight :count="obj.maxLength" :maxlength="obj.maxLength || -1" style="min-width: 45vw;" />
     </view>
   </view>
   <u-popup :show="localObj.pops.showPop" @close="onPopClose" :closeable="true" :safeAreaInsetBottom="true" :round="10"
