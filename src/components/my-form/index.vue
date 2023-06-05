@@ -196,7 +196,7 @@
         style="margin-left: 0.3rem; width: 1rem; height: 1rem;" />
       <view v-if="obj.editing && obj.type === 'textarea'" style="min-width: 45vw;">
         <u-textarea v-model="obj.value" :placeholder="obj.placeholder" placeholderClass="my-input-placeholder"
-          :focus="true" @confirm="(e) =>
+          :focus="true" @blur="(e) =>
             onEditComplete({
               obj,
               index,
