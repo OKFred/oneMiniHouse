@@ -194,15 +194,17 @@
       </text>
       <image v-else-if="obj.postfix" :src="obj.postfix" mode="widthFix"
         style="margin-left: 0.3rem; width: 1rem; height: 1rem;" />
-      <u-textarea v-if="obj.editing && obj.type === 'textarea'" v-model="obj.value" :placeholder="obj.placeholder"
-        :focus="true" @blur="(e) =>
-          onEditComplete({
-            obj,
-            index,
-            ...e.detail,
-            parent: parentObj.parent,
-          })
-          " autoHeight :count="obj.maxLength" :maxlength="obj.maxLength || -1" style="min-width: 45vw;" />
+      <view v-if="obj.editing && obj.type === 'textarea'" style="min-width: 45vw;">
+        <u-textarea v-model="obj.value" :placeholder="obj.placeholder" placeholderClass="my-input-placeholder"
+          :focus="true" @confirm="(e) =>
+            onEditComplete({
+              obj,
+              index,
+              ...e.detail,
+              parent: parentObj.parent,
+            })
+            " autoHeight :count="obj.maxLength" :maxlength="obj.maxLength || -1" />
+      </view>
     </view>
   </view>
   <u-popup :show="localObj.pops.showPop" @close="onPopClose" :closeable="true" :safeAreaInsetBottom="true" :round="10"
