@@ -3,6 +3,7 @@ node_modules
 /dist
 /mtk/url.js
 package-lock.json
+/src/wxcomponents
  
 # local env files
 .env.local

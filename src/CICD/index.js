@@ -38,4 +38,15 @@ function copyFolder(src, dist) {
     });
 }
 
+function checkDirectory(src, dist, callback) {
+    fs.access(dist, fs.constants.F_OK, function (err) {
+        if (err) {
+            fs.mkdirSync(dist);
+            callback(src, dist);
+        } else {
+            callback(src, dist);
+        }
+    });
+}
+
 export { weixinAutomation };
