@@ -50,6 +50,7 @@ onMounted(() => {
 let localObj = reactive({
   pageName: "我的",
   headerColor: "#9acafc",
+  titleStyle: "font-size: 1.3rem !important; font-weight: bold;",
   hidePageName: globalData['平台'] === '嵌入网页',
   fn: {
     serverQuery,

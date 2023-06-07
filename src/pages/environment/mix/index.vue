@@ -51,7 +51,7 @@ const props = defineProps({
 let localObj = reactive({
   pageName: "综合检测",
   headerColor: "#9acafc",
-  titleStyle: "color: black !important;",
+  titleStyle: "font-size: 1.3rem !important; font-weight: bold; color: white !important;",
   showBackButton: true,
   pageShow: false,
   fn: {},

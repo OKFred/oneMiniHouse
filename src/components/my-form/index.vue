@@ -47,17 +47,16 @@
             :minDate="obj.minDate" :maxDate="obj.maxDate" />
         </view>
         <view v-else-if="obj.type === 'realSelect'" style="height: 1rem; width: 100%;">
-          <picker mode="selector" :value="obj.value" :range-key="`label`" :range="parentObj.options?.[obj.option]"
-            @change="(e) =>
-              onEditComplete({
-                e,
-                name: parentObj.options?.[obj.option]?.[e.detail.value]?.label,
-                value: parentObj.options?.[obj.option]?.[e.detail.value]?.value, //注意避坑，原生的value是range的index，不是真正的value
-                obj,
-                index,
-                parent: parentObj.parent,
-              })
-              ">
+          <picker mode="selector" :value="obj.index" range-key="label" :range="parentObj.options?.[obj.option]" @change="(e) =>
+            onSelectChange({
+              e,
+              name: parentObj.options?.[obj.option]?.[e.detail.value]?.label,
+              value: parentObj.options?.[obj.option]?.[e.detail.value]?.value,
+              obj,
+              index,
+              parent: parentObj.parent,
+            })
+            ">
             <text class="my-inline-text my-ellipsis"
               :style="` color: ${(obj.value || obj.name) ? (obj.valueColor ? obj.valueColor : '#181818') : obj.placeholderColor ? obj.placeholderColor : '#ACACAC'};`">
               {{ obj.name || obj.value || obj.placeholder }}
@@ -69,7 +68,8 @@
           <!-- JS配置对话框 -->
         </view>
         <view v-else-if="obj.type === 'switch'" class="my-far-table" style="width: 100%">
-          <u-switch v-model="obj.name" activeColor="#1EBCA1" size="18" />
+          <u-switch v-model="obj.name" activeColor="#1EBCA1" size="18"
+            @change="(switched) => onSwitchChange({ switched, obj, index })" />
         </view>
         <view v-else-if="obj.type === 'uploader'" style="width: max-content;">
           <view class="my-scrollable-container">
@@ -94,7 +94,7 @@
         <pickerArea v-else-if="obj.type === 'realRegion'" :defaultRegion="obj.value"
           @getRegion="(regionArr) => onRegionChange({ regionArr, obj, index })">
           <text class="my-inline-text my-ellipsis"
-            :style="`color: ${(obj.value || obj.name) ? (obj.valueColor ? obj.valueColor : '#181818') : obj.placeholderColor ? obj.placeholderColor : '#ACACAC'};`">
+            :style="`max-width: 45vw; color: ${(obj.value || obj.name) ? (obj.valueColor ? obj.valueColor : '#181818') : obj.placeholderColor ? obj.placeholderColor : '#ACACAC'};`">
             {{ obj.name || obj.placeholder }}
           </text>
         </pickerArea>
@@ -337,6 +337,16 @@ function datetimeFormatter(type, value) {
   return value;
 }
 
+//开关相关
+function onSwitchChange({ switched, obj, index } = {}) {
+  let { valueArr = [{ name: true, value: true }, { name: false, value: false }] } = obj;
+  let targetObj = valueArr.find((o) => o.name === switched);
+  let { name, value } = targetObj;
+  obj.name = name;
+  obj.value = value;
+  // console.log("开关切换", switched, obj);
+}
+
 class form_datetime {
   constructor(obj) {
     obj.datetimeShow = true;
@@ -356,14 +366,6 @@ class form_readOnly {
 class form_internal {
   constructor(obj) {
     // console.log("内部处理");
-    return obj;
-  }
-}
-
-class form_switch {
-  constructor(obj) {
-    obj.name = !obj.name;
-    obj.value = obj.name ? 1 : 0;
     return obj;
   }
 }
@@ -427,14 +429,12 @@ function onEdit(params) {
   let { type } = obj;
   if (type === undefined) {
     return new form_readOnly(obj);
-  } else if (type === 'realSelect' || type === 'realDate' || type === 'select' || type === 'checkbox' || type === 'list' || type === 'uploader') {
+  } else if (type === 'realSelect' || type === 'realDate' || type === 'select' || type === 'checkbox' || type === 'list' || type === 'uploader' || type === 'switch') {
     return new form_internal({ obj });
   } else if (type === 'datetime') {
     return new form_datetime(obj);
   } else if (type === 'map') {
     return new form_map(obj);
-  } else if (type === 'switch') {
-    return new form_switch(obj);
   } else if (type === 'dialog') {
     return new form_dialog(obj);
   } else if (type === 'pop-checkbox') {
@@ -444,6 +444,16 @@ function onEdit(params) {
   } else {
     console.log(false, "⚠️未知表单类型");
   }
+}
+
+function onSelectChange(params) {
+  if (props.parentObj.readOnly) return;
+  let { e, obj, index, value, name, parent } = params;
+  obj.editing = false;
+  obj.value = value;
+  obj.name = name;
+  obj.index = e.detail.value; //注意避坑，原生的value是range的index，不是真正的value
+  console.log("表单已更新", JSON.parse(JSON.stringify(obj)));
 }
 
 function onEditComplete(params) {
@@ -520,7 +530,7 @@ function onUploadComplete(paramObj) {
   let status = props.parentObj.onUploadComplete?.(paramObj);
   if (typeof status === 'boolean' && !status) return;
   let { uploadArr, obj } = paramObj;
-  obj.valueArr = [...obj.valueArr, ...uploadArr.map(str => ({ url: str }))];
+  obj.valueArr = [...(obj.valueArr || []), ...uploadArr.map(str => ({ url: str }))];
   obj.value = obj.valueArr.map(obj => obj.url).join(',');
   let { maxLength } = obj;
   if (maxLength && obj.valueArr.length > maxLength) {

@@ -171,7 +171,7 @@ globalThis.sleep = network.sleep;
 
 globalThis.prepareMsg = function prepareMsg(What) {
     let queryObj = rpc.find((obj) => obj.info.index === What);
-    if (!queryObj) return console.log("⚠️找不到对应的接口");
+    if (!queryObj) return console.log("⚠️找不到对应的接口", What);
     queryObj = JSON.parse(JSON.stringify(queryObj)); //深拷贝
     /^http/.test(queryObj.request.url)
         ? ""
