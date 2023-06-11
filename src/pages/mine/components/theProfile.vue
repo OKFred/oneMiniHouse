@@ -9,7 +9,7 @@
       </u-upload>
       <view style="flex-direction: column; margin-left: 2vw" class="my-center" v-if="false">
         <view style="font-size: 1.2rem; margin-bottom: 2vh;">
-          {{ localObj.profiles['用户名'] || "" }}
+          {{ localObj.profiles['用户名'] || "欢迎" }}
         </view>
         <view style="font-size: 1rem; font-weight: normal">
           手机号：{{ localObj.profiles['手机号'] || "" }}

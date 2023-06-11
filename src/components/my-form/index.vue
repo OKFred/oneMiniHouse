@@ -20,7 +20,8 @@
       :style="`${!obj.valueWidth && obj.align === 'left' ? 'width: inherit; ' : obj.labelHidden && obj.editing ? 'width: 100%' : 'width: auto;'}`">
       <view :style="`color: #ACACAC; ${obj.align === 'left' ? 'width: inherit; ' : 'width: auto;'}`"
         class="my-far-table my-center-vertically" v-if="!obj.editing">
-        <view v-if="obj.type === 'realDate'" class="my-far-table my-center-vertically" style="width: 100%">
+        <view v-if="obj.type === 'realDate'" class="my-far-table my-center-vertically"
+          :style="`${obj.align === 'left' ? '' : 'width: 100%;'}`">
           <text />
           <picker mode="date" :value="obj.value" @change="(e) => onEditComplete({
             e,
@@ -36,7 +37,8 @@
             </text>
           </picker>
         </view>
-        <view v-else-if="obj.type === 'datetime'" class="my-center-vertically" style="width: 100%">
+        <view v-else-if="obj.type === 'datetime'" class="my-center-vertically"
+          :style="`${obj.align === 'left' ? '' : 'width: 100%;'}`">
           <text class="my-inline-text my-ellipsis"
             :style="`color: ${(obj.value || obj.name) ? (obj.valueColor ? obj.valueColor : '#181818') : obj.placeholderColor ? obj.placeholderColor : '#ACACAC'};`">
             {{ obj.name || obj.value || obj.placeholder }}
@@ -262,7 +264,10 @@ const props = defineProps({
 });
 
 //本地变量和函数
-let formArr = computed(() => props.parentObj.formArr.filter((o) => !o.hidden));
+let formArr = computed(() => props.parentObj.formArr.filter((o) => !o.hidden).map(o => {
+  if (o.type === 'textarea' && o.value === null) o.value = ''; //null的时候u-textarea会报错
+  return o;
+}));
 let localObj = reactive({
   pops: {
     showPop: false,
@@ -448,12 +453,9 @@ function onEdit(params) {
 
 function onSelectChange(params) {
   if (props.parentObj.readOnly) return;
-  let { e, obj, index, value, name, parent } = params;
-  obj.editing = false;
-  obj.value = value;
-  obj.name = name;
+  let { e, obj } = params;
   obj.index = e.detail.value; //注意避坑，原生的value是range的index，不是真正的value
-  console.log("表单已更新", JSON.parse(JSON.stringify(obj)));
+  onEditComplete(params);
 }
 
 function onEditComplete(params) {

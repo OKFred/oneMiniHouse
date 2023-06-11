@@ -1,8 +1,7 @@
 <template>
-  <picker mode="date" v-if="parentObj.type === 'date'" :value="localObj.formObj.date" @change="
-    (e) =>
-      parentObj.onDateChange({ e, ...e.detail, parent: parentObj.parent })
-  " class="my-picker">
+  <picker mode="date" v-if="parentObj.type === 'date'" :value="localObj.formObj.date" @change="(e) =>
+    parentObj.onDateChange({ ...parentObj, e, ...e.detail })
+    " class="my-picker">
     <slot :localObj="localObj" name="datePicker">
       <button>请选择日期</button>
     </slot>
@@ -10,10 +9,9 @@
       {{ localObj.formObj.date || "请选择日期" }}
     </text>
   </picker>
-  <picker mode="time" v-if="parentObj.type === 'time'" :value="localObj.formObj.time" @change="
-    (e) =>
-      parentObj.onTimeChange({ e, ...e.detail, parent: parentObj.parent })
-  " class="my-picker">
+  <picker mode="time" v-if="parentObj.type === 'time'" :value="localObj.formObj.time" @change="(e) =>
+    parentObj.onTimeChange({ ...parentObj, e, ...e.detail })
+    " class="my-picker">
     <slot :localObj="localObj" name="timePicker">
       <button>请选择时间</button>
     </slot>
@@ -21,15 +19,12 @@
       {{ localObj.formObj.time || "请选择时间" }}
     </text>
   </picker>
-  <picker mode="region" level="region" v-else-if="parentObj.type === 'region'" :value="localObj.formObj.region"
-    :onChange="
-      (e) =>
-        parentObj.onRegionChange({
-          e,
-          ...e.detail,
-          index,
-          parent: parentObj.parent,
-        })
+  <picker mode="region" level="region" v-else-if="parentObj.type === 'region'" :value="localObj.formObj.region" :onChange="(e) =>
+    parentObj.onRegionChange({
+      ...parentObj,
+      e,
+      ...e.detail,
+    })
     " class="my-picker">
     <slot :localObj="localObj" name="regionPicker">
       <button>请选择地区</button>
@@ -80,7 +75,7 @@ const props = defineProps({
 let localObj = reactive({
   formObj: {
     date: new Date().Format("yyyy-MM-dd"),
-    region: ["云南省", "玉溪市", "通海县"],
+    region: ["浙江省", "衢州市", "柯城区"],
   },
 });
 </script>

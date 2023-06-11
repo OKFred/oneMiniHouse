@@ -1,7 +1,7 @@
 <template>
   <view style="background-color: white;">
     <u-tabs :list="parentObj.tabArr" :current="parentObj.currentIndex" @click="onTabChange" :scrollable="false"
-      lineColor="#114FFF" :activeStyle="`color:#114FFF; font-size: 1rem; font-weight: bold;`"
+      lineColor="#1EBCA1" :activeStyle="`color:#1EBCA1; font-size: 1rem; font-weight: bold;`"
       :inactiveStyle="`color:#181818; font-size: 1rem; font-weight: bold;`" lineWidth="40" />
   </view>
 </template>

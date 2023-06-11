@@ -21,14 +21,13 @@ console.log("引入网页依赖");
 import rpc from "/src/fetch/rpc";
 import router from "/src/router/index";
 import myApp from "./app.data.js";
-// import userAPI from "/src/api/userAPI.js";
 
 console.log("全局数据引入", myApp);
 
 (function checkStage() {
     return process.env.NODE_ENV === "development"
         ? (() => {
-              return console.log("🚧开发环境");
+              console.log("🚧开发环境");
               // import("./app.debug.js");
               let doLogin = async (paramObj) => {
                   if (!paramObj.account || !paramObj.password) return console.log("未配置自动登录");

@@ -5,27 +5,34 @@
       <view v-for="({ width, label, pinned }, index) in parentObj?.tableColumn" :key="index"
         :class="`th my-center my-center-vertically ${pinned === 'left' ? 'pinned-left' : pinned === 'right' ? 'pinned-right' : ' '} ${pinned && index === parentObj.tableColumn.length - 1 ? 'pinned-first' : ''}`"
         :style="`${width ? 'width:' + width : ''};`">
-        <text>{{ label }}</text>
+        {{ label }}
       </view>
     </view>
     <!-- 表体 -->
     <view class="tr bg-g my-center-vertically" v-for="(obj, i) in parentObj?.tableRow" :key="i">
       <view
-        v-for="({ key, label, prefix, postfix, width, pinned, color, label2, color2 }, index) in parentObj?.tableColumn"
+        v-for="({ key, label, prefix, postfix, width, pinned, color, backgroundColor, backgroundColor2, label2, color2 }, index) in parentObj?.tableColumn"
         :key="index"
         :class="`td my-center my-center-vertically ${pinned === 'left' ? 'pinned-left' : pinned === 'right' ? 'pinned-right' : ''} ${pinned && i === parentObj.tableRow.length - 1 ? 'pinned-last' : pinned ? 'pinned' : ''}`"
-        :style="`${width ? 'width: ' + width : ''}; ${color ? 'color: ' + color : ''}; flex-direction: column;`"
+        :style="`${width ? 'width: ' + width : ''}; ${label2 ? ' flex-direction: column;' : ''};`"
         @tap="parentObj?.onTable({ rowObj: obj, row: i, col: index, colObj: parentObj?.tableColumn[index] })">
-        <view :class="`my-center my-center-vertically`">
-          <view> {{ obj[prefix] || prefix || '' }} </view>
-          <view> {{ obj[key] !== undefined ? obj[key] : obj[label] !== undefined ? obj[label] : key !== undefined ? key :
-            label }}
+        <view class="my-center my-center-vertically" v-if="!obj.editing">
+          <view class="my-inline-text my-ellipsis"> {{ obj[prefix] || prefix || '' }} </view>
+          <view
+            :style="`${color ? 'color: ' + color : ''}; ${backgroundColor ? 'padding: 0.25rem 0.5rem; margin-right: 0.25rem; background-color: ' + backgroundColor : ''}`"
+            class="my-inline-text my-ellipsis"> {{ obj[key] !== undefined ? obj[key] : obj[label] !== undefined ?
+              obj[label] : key !== undefined ? key :
+                label }}
           </view>
-          <view> {{ obj[postfix] || postfix || '' }} </view>
+          <view class="my-inline-text my-ellipsis"> {{ obj[postfix] || postfix || '' }} </view>
         </view>
-        <view :class="`my-center my-center-vertically`" v-if="label2" :style="`${color2 ? 'color: ' + color2 : ''};`">
-          <view> {{ obj[key2] !== undefined ? obj[key2] : obj[label2] !== undefined ? obj[label2] : key2 !== undefined ?
-            key2 : label2 }}
+        <input v-else type="text" v-model="obj[key]" :focus="true"
+          @confirm="parentObj?.onTable({ rowObj: obj, row: i, col: index, colObj: parentObj?.tableColumn[index], modified: true })" />
+        <view v-if="label2"
+          :style="`${color2 ? 'color: ' + color2 : ''}; ${backgroundColor2 ? 'font-size: 0.75rem; border-radius: 0.5rem; padding: 0.25rem; background-color: ' + backgroundColor2 : ''}`">
+          <view class="my-inline-text my-ellipsis"> {{ obj[key2] !== undefined ? obj[key2] : obj[label2] !== undefined ?
+            obj[label2] : key2 !== undefined ?
+              key2 : label2 }}
           </view>
         </view>
       </view>
@@ -109,6 +116,7 @@ const props = defineProps({
   position: relative;
   padding: 0 0.2rem;
   min-width: 6rem;
+  max-width: 10rem;
 }
 
 .tr .null {
@@ -142,6 +150,8 @@ const props = defineProps({
 
 .pinned-first {
   box-shadow: -1px -1px 2px rgba(0, 0, 0, 0.14);
+  position: absolute !important;
+  height: inherit;
 }
 
 .pinned-last {
