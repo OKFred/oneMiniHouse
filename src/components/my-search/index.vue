@@ -9,6 +9,7 @@
     <u-search v-model="parentObj.userSearch" :show-action="true" :placeholder="parentObj.placeholder"
       @change="(value) => value === '' && parentObj.onSearch({ value, parent: parentObj.parent })"
       @search="(value) => parentObj.onSearch({ value, parent: parentObj.parent })"
+      @custom="(value) => parentObj.onSearch({ value, parent: parentObj.parent })"
       @clear="(value) => parentObj.onSearch({ value, parent: parentObj.parent })" height="5vh"
       :inputStyle="`font-size: 1rem;`" :actionStyle="`font-size: 1rem; font-weight: bold;`" actionText="搜索" shape="square"
       :animation="true" bgColor="#F7F7F7" />
