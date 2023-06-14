@@ -6,12 +6,12 @@
 
 /**
  * @description: 保存图片到相册
- * @param {String} filePath 图片路径
+ * @param {String} src 图片路径
  * @return {Boolean} 是否保存成功
- * @example: imageToAlbum(filePath)
- * @example: filePath = "https://example.com/abc.png"
+ * @example: imageToAlbum(src)
+ * @example: src = "https://example.com/abc.png"
  **/
-async function imageToAlbum(filePath) {
+async function imageToAlbum(src) {
     let res = await new Promise((resolve, reject) => {
         if (!uni.getSetting) return resolve({ authSetting: { "scope.writePhotosAlbum": true } });
         uni.getSetting({ success: resolve }); //获取用户的当前设置
@@ -39,12 +39,28 @@ async function imageToAlbum(filePath) {
             },
         }); //如果没有授权，向用户发起请求
     }
-    // console.log(res);
+    console.log(res);
+    let filePath = await new Promise((resolve, reject) => {
+        uni.getImageInfo({
+            src,
+            success: (res) => {
+                resolve(res.path);
+            },
+            fail: (res) => {
+                console.log(res);
+                resolve(false);
+            },
+        });
+    });
+    if (!filePath) return uni.showToast({ title: "图片加载失败", icon: "none", duration: 2000 });
     let result = await new Promise((resolve, reject) =>
         uni.saveImageToPhotosAlbum({
             filePath,
-            success: resolve,
-            fail: () => resolve(false),
+            success: () => resolve(true),
+            fail: (res) => {
+                console.log(res);
+                resolve(false);
+            },
         }),
     );
     uni.hideLoading();

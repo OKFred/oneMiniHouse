@@ -7,6 +7,14 @@ import fs from "fs";
 import { pageFinder, uniPageMaker } from "./src/page.config.js";
 import { weixinAutomation } from "./src/CICD/index.js";
 
+(function checkIfEnvExists() {
+    let path = "./src/env.json";
+    if (!fs.existsSync(path)) {
+        fs.writeFileSync(path, JSON.stringify({ account: "", password: "" }));
+        console.log("🚩首次加载，请在src目录下配置env.json文件");
+    }
+})();
+
 let pageObj = pageFinder();
 if (!pageObj || typeof pageObj !== "object") throw new Error("未找到页面");
 let pageConfig = uniPageMaker(pageObj);
