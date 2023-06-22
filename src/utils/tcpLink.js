@@ -6,7 +6,7 @@ let main = (() => {
         port: "",
         connected: false,
         socket: null,
-        query: "",
+        // query: "",
         dataReader: null,
     };
 
@@ -19,9 +19,9 @@ let main = (() => {
         let { address, port } = tcp;
         console.log("连接目标服务器", address, port);
         if (tcp.connected) return console.log("已连接，无需重复连接");
-        if (!tcp.query) {
+/*         if (!tcp.query) {
             return console.log("请先设置问询数据");
-        }
+        } */
         onTCPConnect({ address, port });
     } //连接服务器
 

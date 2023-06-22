@@ -30,17 +30,6 @@ import bg from "/src/utils/bg.js";
 import tcpLink from "/src/utils/tcpLink.js";
 import meterPower from "/src/utils/meterPower.js";
 
-const energyQueryHex = (() => {
-  let hex = meterPower.energyQuery();
-  hex += modbus.crc(hex);
-  return hex;
-})();
-const detailQueryHex = (() => {
-  let hex = meterPower.detailQuery();
-  hex += modbus.crc(hex);
-  return hex;
-})();
-
 //父系入参
 const { onNav, onNavBack, globalData } = globalThis.app;
 
@@ -67,6 +56,7 @@ function setData(obj) {
 //本地变量和函数
 
 setData({
+  addressUpdate,
   intervalTask: null,
   currentBuffer: "",
   buffers: {
@@ -111,7 +101,7 @@ function tcpInit() {
   if (!bgObj.port) bgObj.port = globalThis.app.globalData.port;
   tcpLink.setData({
     ...bgObj,
-    query: detailQueryHex,
+    // query: detailQueryHex,
     dataReader, //设置对应的数据读取器
     saver
   });
@@ -127,15 +117,49 @@ function tcpPause() {
   tcpLink.setData({
     address: '',
     port: '',
-    query: null,
+    // query: null,
     dataReader: null
   });
 } //暂停TCP
+
+function addressUpdate(newAddress) {
+  if (!newAddress) return;
+  clearInterval(props.localObj.intervalTask);
+  //clear buffer
+  props.localObj.currentBuffer = "";
+  props.localObj.buffers = {
+    '电能表单': '',
+    '参数表单': '',
+  };
+  //clear form
+  props.localObj.formCollection = {
+    '电能表单': [],
+    '参数表单': [],
+  };
+  //clear form value
+  props.localObj.forms.forEach((form) => {
+    form.formArr.forEach((item) => {
+      item.value = "";
+    });
+  });
+  meterPower.addressWriteQuery(newAddress);
+  taskStart();
+}
 
 function taskStart() {
   console.log("开启轮询");
   globalThis.queryResult(true, "连接中，请稍后...");
   props.localObj.intervalTask = setInterval(() => {
+    const energyQueryHex = (() => {
+      let hex = meterPower.energyQuery();
+      hex += modbus.crc(hex);
+      return hex;
+    })();
+    const detailQueryHex = (() => {
+      let hex = meterPower.detailQuery();
+      hex += modbus.crc(hex);
+      return hex;
+    })();
     let status = tcpLink.sendMessage(detailQueryHex); //发送问询数据
     if (!status) clearInterval(props.localObj.intervalTask);
     setTimeout(() => tcpLink.sendMessage(energyQueryHex), 1000);

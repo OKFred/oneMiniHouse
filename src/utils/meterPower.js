@@ -14,6 +14,11 @@ let main = (() => {
   let energyLength = 18;
   let detailLength = 74;
 
+  function addressWriteQuery(newAddress) {
+    deviceAddress = newAddress;
+    return deviceAddress;;
+  }
+
   function energyQuery() {
     let targetMemory = "4000";
     let byteRead = "0002";
@@ -118,6 +123,7 @@ let main = (() => {
     return result;
   } //电表电能数据解读
   return {
+    addressWriteQuery,
     detailQuery,
     detailReader,
     energyQuery,
