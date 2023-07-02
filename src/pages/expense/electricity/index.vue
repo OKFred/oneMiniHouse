@@ -96,6 +96,7 @@ function setOptions(optionArr) {
   let userObj = formObj_selectors.formArr.find(obj => obj.label === '当前用户');
   userObj.value = finalOptionObj.users[0].value;
   userObj.name = finalOptionObj.users[0].name;
+  localObj.addressUpdate?.(userObj.value);
   console.log('选项', localObj.options);
 }
 </script>

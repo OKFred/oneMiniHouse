@@ -26,8 +26,8 @@ async function fakeData({ options } = {}) {
             {
                 tag: "users",
                 list: [
-                    { id: '58', name: "房东2F" },
-                    { id: '65', name: "租客小忠1F" },
+                    { id: "0E", name: "办公室3F" },
+                    { id: "01", name: "默认" },
                 ],
             },
         ];

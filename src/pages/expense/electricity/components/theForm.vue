@@ -37,7 +37,7 @@ onMounted(() => {
   console.log("自动查询");
   tcpInit();//初始化TCP参数
   tcpLink.toggleConnect() //建立连接
-  taskStart() //轮询任务
+  // taskStart() //轮询任务
 });
 onBeforeUnmount(() => {
   console.log('结束轮询')
@@ -57,7 +57,9 @@ function setData(obj) {
 
 setData({
   addressUpdate,
+  deviceAddress: "",
   intervalTask: null,
+  timeoutTask: null,
   currentBuffer: "",
   buffers: {
     '电能表单': '',
@@ -101,7 +103,6 @@ function tcpInit() {
   if (!bgObj.port) bgObj.port = globalThis.app.globalData.port;
   tcpLink.setData({
     ...bgObj,
-    // query: detailQueryHex,
     dataReader, //设置对应的数据读取器
     saver
   });
@@ -113,7 +114,8 @@ function saver() {
 }
 
 function tcpPause() {
-  clearInterval(props.localObj.intervalTask)
+  clearInterval(props.localObj.intervalTask);
+  clearTimeout(props.localObj.timeoutTask);
   tcpLink.setData({
     address: '',
     port: '',
@@ -123,8 +125,10 @@ function tcpPause() {
 } //暂停TCP
 
 function addressUpdate(newAddress) {
-  if (!newAddress) return;
+  if (!newAddress) return globalThis.queryResult(false, "缺少设备地址");
+  console.log("当前设备地址", newAddress);
   clearInterval(props.localObj.intervalTask);
+  clearTimeout(props.localObj.timeoutTask);
   //clear buffer
   props.localObj.currentBuffer = "";
   props.localObj.buffers = {
@@ -142,27 +146,27 @@ function addressUpdate(newAddress) {
       item.value = "";
     });
   });
-  meterPower.addressWriteQuery(newAddress);
-  taskStart();
+  taskStart(newAddress);
 }
 
-function taskStart() {
+function taskStart(deviceAddress) {
   console.log("开启轮询");
+  props.localObj.deviceAddress = deviceAddress;
   globalThis.queryResult(true, "连接中，请稍后...");
   props.localObj.intervalTask = setInterval(() => {
     const energyQueryHex = (() => {
-      let hex = meterPower.energyQuery();
+      let hex = meterPower.energyQuery({ deviceAddress });
       hex += modbus.crc(hex);
       return hex;
     })();
     const detailQueryHex = (() => {
-      let hex = meterPower.detailQuery();
+      let hex = meterPower.detailQuery({ deviceAddress });
       hex += modbus.crc(hex);
       return hex;
     })();
     let status = tcpLink.sendMessage(detailQueryHex); //发送问询数据
     if (!status) clearInterval(props.localObj.intervalTask);
-    setTimeout(() => tcpLink.sendMessage(energyQueryHex), 1000);
+    props.localObj.timeoutTask = setTimeout(() => tcpLink.sendMessage(energyQueryHex), 1000);
     // console.log("同时查询电能");
   }, 2000);
 }; //轮询任务
@@ -196,7 +200,10 @@ function dataReader(hex) {
     } //CRC校验
     return true;
   }
-  if (![meterPower.deviceAddress].find(str => str === device_address) && !['20', '04'].find(str => str === byte_read)) {
+  if (!props.localObj.deviceAddress) return console.log('等待设备地址自动配置先');
+  let { detailByteRead, energyByteRead, detailLength, energyLength } = meterPower;
+  if (![props.localObj.deviceAddress].find(str => str === device_address)
+    && ![detailByteRead, energyByteRead].find(str => str === byte_read)) {
     // console.log('设备地址/指令不匹配，看看是否有缓存需要合并');
     if (props.localObj.currentBuffer) {
       hex = bufferAdd(hex);
@@ -209,22 +216,22 @@ function dataReader(hex) {
       return bufferReset();
     }
   }
-  if (byte_read === "04") {
+  if (byte_read === energyByteRead) {
     let formName = "电能表单";
-    if (hex.length < meterPower.energyLength) {
+    if (hex.length < energyLength) {
       props.localObj.currentBuffer = formName;
       return bufferAdd(hex);
-    } else if (hex.length > meterPower.energyLength) hex = hex.substring(0, meterPower.energyLength); //长度校验；
+    } else if (hex.length > energyLength) hex = hex.substring(0, energyLength); //长度校验；
     bufferReset();
     if (!crcCheck) return
     return setForm(formName, hex);
-  } else if (byte_read === "20") {
+  } else if (byte_read === detailByteRead) {
     let formName = "参数表单";
-    if (hex.length < meterPower.detailLength) { //[本应该到74，TCP buffer 长度限制在了64]
+    if (hex.length < detailLength) { //[本应该到74，TCP buffer 长度限制在了64]
       props.localObj.currentBuffer = formName;
       // console.log('🚩①长度不足，先放缓存')
       return bufferAdd(hex);
-    } else if (hex.length > meterPower.detailLength) hex = hex.substring(0, meterPower.detailLength); //长度校验；
+    } else if (hex.length > detailLength) hex = hex.substring(0, detailLength); //长度校验；
     bufferReset();
     if (!crcCheck) return
     return setForm(formName, hex);

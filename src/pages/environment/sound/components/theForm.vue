@@ -27,12 +27,6 @@ import bg from "/src/utils/bg.js";
 import tcpLink from "/src/utils/tcpLink.js";
 import sensorSound from "/src/utils/sensorSound.js";
 
-const volumeQueryHex = (() => {
-  let hex = sensorSound.volumeQuery();
-  hex += modbus.crc(hex);
-  return hex;
-})()
-
 //父系入参
 const { onNav, onNavBack, globalData } = globalThis.app;
 
@@ -40,7 +34,7 @@ onMounted(() => {
   console.log("自动查询");
   tcpInit();//初始化TCP参数
   tcpLink.toggleConnect() //建立连接
-  taskStart() //轮询任务
+  // taskStart() //轮询任务
 });
 onBeforeUnmount(() => {
   console.log('结束轮询')
@@ -59,6 +53,8 @@ function setData(obj) {
 //本地变量和函数
 
 setData({
+  addressUpdate,
+  deviceAddress: "",
   intervalTask: null,
   currentBuffer: "",
   buffers: {
@@ -91,7 +87,6 @@ function tcpInit() {
   if (!bgObj.port) bgObj.port = globalThis.app.globalData.port;
   tcpLink.setData({
     ...bgObj,
-    query: volumeQueryHex,
     dataReader, //设置对应的数据读取器
     saver
   });
@@ -103,19 +98,47 @@ function saver() {
 }
 
 function tcpPause() {
-  clearInterval(props.localObj.intervalTask)
+  clearInterval(props.localObj.intervalTask);
   tcpLink.setData({
     address: '',
     port: '',
-    query: null,
+    // query: null,
     dataReader: null
   });
 } //暂停TCP
 
-function taskStart() {
+function addressUpdate(newAddress) {
+  if (!newAddress) return globalThis.queryResult(false, "缺少设备地址");
+  console.log("当前设备地址", newAddress);
+  clearInterval(props.localObj.intervalTask);
+  //clear buffer
+  props.localObj.currentBuffer = "";
+  props.localObj.buffers = {
+    '主表单': '',
+  };
+  //clear form
+  props.localObj.formCollection = {
+    '主表单': [],
+  };
+  //clear form value
+  props.localObj.forms.forEach((form) => {
+    form.formArr.forEach((item) => {
+      item.value = "";
+    });
+  });
+  taskStart(newAddress);
+}
+
+function taskStart(deviceAddress) {
   console.log("开启轮询");
+  props.localObj.deviceAddress = deviceAddress;
   globalThis.queryResult(true, "连接中，请稍后...");
   props.localObj.intervalTask = setInterval(() => {
+    const volumeQueryHex = (() => {
+      let hex = sensorSound.volumeQuery({ deviceAddress });
+      hex += modbus.crc(hex);
+      return hex;
+    })()
     let status = tcpLink.sendMessage(volumeQueryHex); //发送问询数据
     if (!status) clearInterval(props.localObj.intervalTask);
   }, 2000);
@@ -150,7 +173,9 @@ function dataReader(hex) {
     } //CRC校验
     return true;
   }
-  if (![sensorSound.deviceAddress].find(str => str === device_address) && !['02'].find(str => str === byte_read)) {
+  if (!props.localObj.deviceAddress) return console.log('等待设备地址自动配置先');
+  let { generalByteRead, generalLength } = sensorSound;
+  if (![props.localObj.deviceAddress].find(str => str === device_address) && ![generalByteRead].find(str => str === byte_read)) {
     // console.log('设备地址/指令不匹配，看看是否有缓存需要合并');
     if (props.localObj.currentBuffer) {
       hex = bufferAdd(hex);
@@ -163,13 +188,13 @@ function dataReader(hex) {
       return bufferReset();
     }
   }
-  if (byte_read === "02") {
+  if (byte_read === generalByteRead) {
     let formName = "主表单";
-    if (hex.length < sensorSound.generalLength) {
+    if (hex.length < generalLength) {
       props.localObj.currentBuffer = formName;
       // console.log('🚩①长度不足，先放缓存')
       return bufferAdd(hex);
-    } else if (hex.length > sensorSound.generalLength) hex = hex.substring(0, sensorSound.generalLength); //长度校验；
+    } else if (hex.length > generalLength) hex = hex.substring(0, generalLength); //长度校验；
     bufferReset();
     if (!crcCheck) return
     return setForm(formName, hex);

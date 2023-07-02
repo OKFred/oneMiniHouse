@@ -135,11 +135,11 @@
               <view v-if="!obj.showAdd" class="my-center my-center-vertically my-list my-default-button"
                 @tap="onListAdd({ obj, index })">
                 <view>+ </view>
-                <view>添加</view>
+                <view class="my-inline-text">添加</view>
               </view>
               <view v-if="obj.showAdd" class="my-center my-center-vertically my-list my-save-button my-default-button">
                 <view></view>
-                <view>保存</view>
+                <view class="my-inline-text">保存</view>
               </view>
             </view>
           </view>
@@ -150,17 +150,17 @@
             <view v-if="!obj.showAdd" class="my-center my-center-vertically my-list my-default-button"
               @tap="onListAdd({ obj, index })">
               <view>+ </view>
-              <view>添加</view>
+              <view class="my-inline-text">添加</view>
             </view>
             <view v-if="obj.showAdd" class="my-center my-center-vertically my-list my-default-button my-save-button">
               <view>+</view>
-              <view>保存</view>
+              <view class="my-inline-text">保存</view>
             </view>
             <view v-if="obj.showDelete !== ''"
               class="my-center my-center-vertically my-list my-default-button my-delete-button"
               style="color: red; border: 1px solid red; " @tap.capture="onListDelete({ obj, index, i: obj.showDelete })">
               <view>-</view>
-              <view>删除</view>
+              <view class="my-inline-text">删除</view>
             </view>
           </view>
         </view>
@@ -191,7 +191,7 @@
           })
           " />
       <text v-if="obj.postfix && !/^http/.test(obj.postfix)"
-        :style="`margin-left: 0.3rem; color: ${obj.postfixColor ? obj.postfixColor : '#181818'};`">
+        :style="`margin-left: 0.3rem; min-width: fit-content; color: ${obj.postfixColor ? obj.postfixColor : '#181818'};`">
         {{ obj.postfix }}
       </text>
       <image v-else-if="obj.postfix" :src="obj.postfix" mode="widthFix"
@@ -210,14 +210,14 @@
     </view>
   </view>
   <u-popup :show="localObj.pops.showPop" @close="onPopClose" :closeable="true" :safeAreaInsetBottom="true" :round="10"
-    mode="bottom" zIndex="11" overlayStyle="z-index:10">
+    mode="bottom" zIndex="11" overlayStyle="z-index: 11">
     <view>
       <!-- 弹窗标题 -->
       <view class="my-sticky-header" style="padding: 2vh 4vw; position: relative;">
         <view class="my-heading">{{ localObj.pops['弹窗标题'] || '弹窗标题' }}</view>
       </view>
       <!-- 筛选条件 -->
-      <view style="padding: 1vh 4vw;" v-for="(obj, i) in localObj.pops.filterArr">
+      <view style="padding: 1vh 4vw;" v-for="(obj, i) in localObj.pops.filterArr" :key="i">
         <view v-if="obj.type === 'pop-checkbox'">
           <u-checkbox-group v-model="obj.selectArr" @change="(e) => onCheck({ e, obj })"
             :placement="obj.inline ? 'row' : 'column'">
