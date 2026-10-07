@@ -1,0 +1,21 @@
+{
+  "cpuCoreAlerts": {
+    "webhookFile": "/run/secrets/feishu_webhook",
+    "thresholdC": 85,
+    "durationSeconds": 120,
+    "maxGapSeconds": 90,
+    "maxSampleAgeSeconds": 90,
+    "sources": [
+      {
+        "siteId": "example-home",
+        "gatewayId": "example-host",
+        "deviceId": "temperature-example-host",
+        "label": "示例主机",
+        "coreMetrics": [
+          "cpu_core_0_temperature_c",
+          "cpu_core_1_temperature_c"
+        ]
+      }
+    ]
+  }
+}

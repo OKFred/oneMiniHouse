@@ -1,0 +1,48 @@
+#!/bin/sh /etc/rc.common
+# Generate before luci_statistics (79) and collectd (80). No extra daemon.
+START=78
+STOP=12
+USE_PROCD=1
+
+service_triggers() {
+	procd_add_reload_trigger 'collectd_mqtt_ui'
+}
+
+render_config() {
+	local target=/etc/collectd/conf.d/90-mqtt-ui.conf
+	local candidate
+	umask 077
+	mkdir -p /etc/collectd/conf.d || return 1
+	candidate="$(mktemp /etc/collectd/conf.d/.mqtt-ui.XXXXXX)" || return 1
+	if ! /usr/libexec/collectd-mqtt-ui-render > "$candidate"; then
+		rm -f "$candidate"
+		logger -t collectd-mqtt-ui 'Invalid settings; previous MQTT configuration preserved'
+		return 1
+	fi
+	# -t parses configuration and loads plugins without initializing connections.
+	# Keep detailed parse output private: a malformed value could contain a secret.
+	if ! /usr/sbin/collectd -t -C "$candidate" >/dev/null 2>&1; then
+		rm -f "$candidate"
+		logger -t collectd-mqtt-ui 'collectd rejected candidate; previous configuration preserved'
+		return 1
+	fi
+	if cmp -s "$candidate" "$target"; then
+		rm -f "$candidate"
+		return 0
+	fi
+	chmod 600 /etc/config/collectd_mqtt_ui "$candidate"
+	mv -f "$candidate" "$target" || return 1
+	changed=1
+}
+
+start_service() {
+	render_config
+}
+
+reload_service() {
+	local changed=0
+	render_config || return 1
+	if [ "$changed" = 1 ] && /etc/init.d/collectd status >/dev/null 2>&1; then
+		/etc/init.d/collectd restart
+	fi
+}

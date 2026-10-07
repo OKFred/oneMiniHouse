@@ -1,0 +1,24 @@
+{
+  "name": "@one-minihouse/raw-archive-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.5.0",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "types": "wrangler types",
+    "test": "node --test test/*.test.ts",
+    "build": "wrangler deploy --dry-run",
+    "deploy": "wrangler deploy --config wrangler.local.jsonc"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260919.1",
+    "@types/node": "24.13.4",
+    "typescript": "6.0.3",
+    "wrangler": "4.135.0"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,44 @@
+[Unit]
+Description=Whitelisted NVIDIA GPU core temperature cache
+ConditionPathExists=/etc/one-minihouse-nvidia-temperature/config.json
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/bin/python3 -I -B /opt/one-minihouse-nvidia-temperature/nvidia_reader.py
+Environment=PYTHONDONTWRITEBYTECODE=1
+RuntimeDirectory=one-minihouse-nvidia-temperature
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+TimeoutStartSec=45
+TimeoutStopSec=5
+KillMode=control-group
+MemoryMax=128M
+TasksMax=8
+UMask=0022
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+PrivateDevices=no
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/etc/one-minihouse-nvidia-temperature /opt/one-minihouse-nvidia-temperature /dev
+ReadWritePaths=/run/one-minihouse-nvidia-temperature
+InaccessiblePaths=-/etc/one-minihouse-temperature -/var/lib/one-minihouse-temperature-mqtt
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+DevicePolicy=closed
+# Installer grants only /dev/nvidiactl and configured /dev/nvidiaN nodes rw.
+# NVML requires rw opens; neither rw nor an empty capability set limits ioctl
+# payloads. The fixed trusted query command/config is the read-only boundary.
+SystemCallFilter=~@mount @reboot @swap @module @debug

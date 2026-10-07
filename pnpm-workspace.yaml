@@ -1,0 +1,6 @@
+# The legacy app is an independent package; gateway and ingestor keep their own workspaces.
+packages:
+  - '.'
+overrides:
+  # Newer 4.6 releases require Vue 3.5; the retained DCloud toolchain pins Vue 3.2.47.
+  vue-router: 4.5.1

@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "devices": [
+    {
+      "path": "/dev/disk/by-id/ata-EXAMPLE_SATA_SSD_SYNTHETIC001",
+      "expected_model": "EXAMPLE SATA SSD",
+      "expected_serial": "SYNTHETIC001",
+      "rotation": "ssd",
+      "device_type": "sat",
+      "metric": "sata_ssd_a_temperature_c"
+    },
+    {
+      "path": "/dev/disk/by-id/usb-EXAMPLE_SATA_BRIDGE_SYNTHETIC002-0:0",
+      "expected_model": "EXAMPLE SATA HDD",
+      "expected_serial": "SYNTHETIC002",
+      "rotation": "hdd",
+      "device_type": "sat",
+      "metric": "sata_hdd_a_temperature_c"
+    }
+  ]
+}

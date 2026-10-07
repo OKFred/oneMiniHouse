@@ -1,0 +1,21 @@
+{
+  "siteId": "example-home",
+  "gatewayId": "example-gateway",
+  "adapter": "hci0",
+  "mqtt": {
+    "url": "mqtts://mqtt.example.com:8883",
+    "clientId": "one-minihouse-example-gateway",
+    "username": "example_publisher",
+    "passwordFile": "/run/secrets/mqtt_password",
+    "topicPrefix": "iot/v1/example-home/example-gateway"
+  },
+  "queue": { "maxAgeDays": 7, "maxRows": 100000 },
+  "devices": [{
+    "id": "socket-example",
+    "driver": "yunmu-v5",
+    "address": "02:00:00:00:00:01",
+    "protocol": { "readPayloadHex": "b0b8b0" },
+    "intervalSeconds": 60,
+    "timeoutSeconds": 60
+  }]
+}

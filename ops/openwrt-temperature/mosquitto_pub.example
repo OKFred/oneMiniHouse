@@ -1,0 +1,9 @@
+# Install as /etc/one-minihouse-temperature/mosquitto_pub, root:root 0600.
+# One option per line. Keep secrets out of argv and Git. Do not add -r/--retain.
+-h mqtt.example.com
+-p 8883
+-i one-minihouse-r4s-temperature
+-u example_router_publisher
+-P REPLACE_WITH_DEDICATED_PASSWORD
+--cafile /etc/ssl/certs/ca-certificates.crt
+--tls-version tlsv1.2

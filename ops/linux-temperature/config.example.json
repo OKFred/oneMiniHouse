@@ -1,0 +1,17 @@
+{
+  "site_id": "example-home",
+  "gateway_id": "example-host",
+  "device_id": "temperature-example-host",
+  "interval_seconds": 60,
+  "mqtt": {
+    "url": "mqtts://broker.example.com:8883",
+    "client_id": "example-host-temperature",
+    "username": "example-host-publisher",
+    "password_file": "/etc/one-minihouse-temperature/mqtt_password"
+  },
+  "queue": {"max_age_days": 7, "max_rows": 100000},
+  "sensors": [
+    {"selector": "hwmon:coretemp:Package id 0", "metric": "cpu_package_temperature_c"},
+    {"selector": "hwmon:nvme.pci-0000_01_00.0:Composite", "metric": "nvme_a_temperature_c"}
+  ]
+}

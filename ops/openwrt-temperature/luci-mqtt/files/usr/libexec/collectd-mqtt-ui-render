@@ -1,0 +1,67 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Render only; no service changes or network access. Optional UCI directory for tests.
+set -eu
+export LC_ALL=C
+config_dir="${1:-/etc/config}"
+get() { uci -c "$config_dir" -q get "collectd_mqtt_ui.main.$1" || true; }
+fail() { printf '%s\n' "MQTT configuration invalid: $1" >&2; exit 1; }
+field() {
+	# Preserve trailing data newlines, removing only UCI's own line terminator.
+	value="$(get "$1"; printf '.')"
+	value="${value%.}"
+	value="${value%
+}"
+	[ -n "$value" ] || fail "missing $1"
+	# Do not allow controls or line breaks in collectd string tokens.
+	[ "$(printf '%s' "$value" | tr -d '\000-\037\177')" = "$value" ] || fail "control character in $1"
+	printf '%s' "$value"
+}
+quote() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+enabled="$(get enabled)"
+case "$enabled" in
+	0|'') printf '# Managed by luci-app-collectd-mqtt; publisher disabled.\n'; exit 0 ;;
+	1) ;;
+	*) fail 'enabled must be 0 or 1' ;;
+esac
+host="$(field host)"
+port="$(field port)"
+client_id="$(field client_id)"
+username="$(field username)"
+password="$(field password)"
+prefix="$(field prefix)"
+qos="$(field qos)"
+retain="$(field retain)"
+store_rates="$(field store_rates)"
+ca_cert="$(field ca_cert)"
+tls_protocol="$(field tls_protocol)"
+printf '%s' "$host" | grep -Eq '^[A-Za-z0-9_.:-]+$' || fail 'host'
+printf '%s' "$port" | grep -Eq '^[0-9]{1,5}$' || fail 'port'
+[ "$port" -ge 1 ] && [ "$port" -le 65535 ] || fail 'port range'
+printf '%s' "$client_id" | grep -Eq '^[A-Za-z0-9_.-]{1,128}$' || fail 'client_id'
+printf '%s' "$prefix" | grep -Eq '^[A-Za-z0-9_-]+([./][A-Za-z0-9_-]+)*$' || fail 'prefix'
+case "$qos" in 0|1|2) ;; *) fail 'qos' ;; esac
+case "$retain" in 0) retain=false ;; 1) retain=true ;; *) fail 'retain' ;; esac
+case "$store_rates" in 0) store_rates=false ;; 1) store_rates=true ;; *) fail 'store_rates' ;; esac
+case "$tls_protocol" in tlsv1.2|tlsv1.3) ;; *) fail 'TLS protocol' ;; esac
+case "$ca_cert" in /*) ;; *) fail 'CA path must be absolute' ;; esac
+[ -r "$ca_cert" ] || fail 'CA file is not readable'
+cat <<EOF
+# Managed by luci-app-collectd-mqtt. Edit through LuCI; mode 0600.
+LoadPlugin mqtt
+<Plugin mqtt>
+  <Publish "luci_ui">
+    Host "$(quote "$host")"
+    Port "$port"
+    ClientId "$(quote "$client_id")"
+    User "$(quote "$username")"
+    Password "$(quote "$password")"
+    Prefix "$(quote "$prefix")"
+    QoS $qos
+    Retain $retain
+    StoreRates $store_rates
+    CACert "$(quote "$ca_cert")"
+    TLSProtocol "$tls_protocol"
+  </Publish>
+</Plugin>
+EOF

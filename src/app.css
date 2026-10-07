@@ -1,0 +1,87 @@
+/* Fred 20230601 */
+
+/*
+* {
+box-sizing: border-box;
+outline: 1px solid limegreen !important;
+background: rgb(0 100 0 / 0.1) !important;
+}
+debug
+ */
+
+/* 全局 */
+view,
+text {
+  font-family: 等线, Arial, Helvetica, sans-serif;
+}
+
+/* 子类居中 */
+.my-center {
+  display: flex;
+  justify-content: center;
+}
+
+.my-center-vertically {
+  display: flex;
+  align-items: center;
+}
+
+/* 字体 */
+.my-heading {
+  font-size: 1.07rem;
+  font-weight: bold;
+  color: #1A1A1A;
+}
+
+.my-inline-label::before {
+  content: '*  ';
+  color: red;
+  padding-right: 0.5rem;
+}
+
+.my-inline-text {
+  white-space: nowrap;
+}
+
+.my-ellipsis {
+  text-overflow: ellipsis;
+  overflow: hidden;
+  display: inline-block;
+}
+
+/* 对齐方式 */
+.my-even-table {
+  display: flex;
+  justify-content: space-evenly;
+}
+
+.my-far-table {
+  display: flex;
+  justify-content: space-between;
+}
+
+.my-around-table {
+  display: flex;
+  justify-content: space-around;
+}
+
+/* 背景色 */
+.my-underground {
+  background-color: #F5F5F5;
+  height: 100vh;
+  width: 100vw;
+  position: fixed;
+  top: 0;
+  z-index: -2;
+}
+
+.my-underground-purple {
+  background-color: #F7F6FB;
+  height: 100vh;
+  width: 100vw;
+  position: fixed;
+  top: 0;
+  z-index: -2;
+}
+
+/* Fred */

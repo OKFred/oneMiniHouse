@@ -1,0 +1,13 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "example-raw-archive",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-19",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "triggers": { "crons": ["17 19 * * *"] },
+  "vars": { "ALLOWED_SITE_ID": "example-home" },
+  "d1_databases": [{ "binding": "RAW_DB", "database_name": "example-raw-archive", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations" }]
+}

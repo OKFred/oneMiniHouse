@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+[ -z "${IPKG_INSTROOT:-}" ] || exit 0
+chmod 600 /etc/config/collectd_mqtt_ui
+/etc/init.d/collectd-mqtt-ui enable
+# Register procd's UCI reload trigger. Does not restart collectd or enable publishing.
+/etc/init.d/collectd-mqtt-ui start
+rm -f /tmp/luci-indexcache /tmp/luci-indexcache.*
+/etc/init.d/rpcd reload
+echo 'MQTT settings installed under Statistics. Publisher remains disabled on first install.'

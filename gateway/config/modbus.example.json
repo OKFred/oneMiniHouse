@@ -1,0 +1,48 @@
+{
+  "siteId": "example-home",
+  "gatewayId": "example-modbus",
+  "mqtt": {
+    "url": "mqtts://mqtt.example.com:8883",
+    "clientId": "one-minihouse-example-modbus",
+    "username": "example_modbus_publisher",
+    "passwordFile": "/run/secrets/mqtt_password",
+    "topicPrefix": "iot/v1/example-home/example-modbus"
+  },
+  "queue": {
+    "maxAgeDays": 7,
+    "maxRows": 100000
+  },
+  "frameQueue": {
+    "maxAgeDays": 30,
+    "maxRows": 250000
+  },
+  "devices": [
+    {
+      "id": "meter-main",
+      "driver": "chint-ddsu666-rtu-tcp",
+      "host": "192.0.2.1",
+      "port": 8899,
+      "slaveId": 1,
+      "intervalSeconds": 60,
+      "timeoutSeconds": 8
+    },
+    {
+      "id": "meter-secondary",
+      "driver": "chint-ddsu666-rtu-tcp",
+      "host": "192.0.2.1",
+      "port": 8899,
+      "slaveId": 2,
+      "intervalSeconds": 60,
+      "timeoutSeconds": 8
+    },
+    {
+      "id": "light-example",
+      "driver": "modbus-light-u32-rtu-tcp",
+      "host": "192.0.2.101",
+      "port": 8899,
+      "slaveId": 3,
+      "intervalSeconds": 60,
+      "timeoutSeconds": 8
+    }
+  ]
+}

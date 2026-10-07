@@ -1,0 +1,47 @@
+{
+  "mqtt": {
+    "url": "mqtts://mqtt.example.com:8883",
+    "clientId": "one-minihouse-ingestor-example-gateway",
+    "username": "example_observer",
+    "passwordFile": "/run/secrets/mqtt_password",
+    "topicPrefixes": [
+      "iot/v1/example-home/example-gateway",
+      "iot/v1/example-home/example-modbus"
+    ],
+    "sessionExpirySeconds": 604800
+  },
+  "collectdTemperatures": [
+    {"topic": "iot/v1/example-home/example-router/collectd/example-home/thermal-thermal_zone0/temperature", "deviceId": "temperature-router", "metric": "cpu_temperature_c"},
+    {"topic": "iot/v1/example-home/example-router/collectd/example-home/thermal-thermal_zone1/temperature", "deviceId": "temperature-router", "metric": "gpu_temperature_c"}
+  ],
+  "queue": {
+    "maxPending": 100000,
+    "maxRejected": 1000,
+    "rawRetentionDays": 180,
+    "frameRetentionDays": 30,
+    "maxProtocolFrames": 250000
+  },
+  "targets": [
+    {
+      "id": "local",
+      "host": "192.0.2.206",
+      "port": 5432,
+      "database": "one_minihouse",
+      "user": "example_ingestor",
+      "passwordFile": "/run/secrets/local_pg_password",
+      "tls": false
+    },
+    {
+      "id": "supabase",
+      "host": "REPLACE_WITH_SESSION_POOLER_HOST",
+      "port": 5432,
+      "database": "postgres",
+      "user": "example_ingestor.REPLACE_PROJECT_REF",
+      "passwordFile": "/run/secrets/supabase_pg_password",
+      "tls": true,
+      "retentionDays": 30,
+      "caFile": "/run/secrets/supabase-ca.crt"
+    }
+  ],
+  "archive": {}
+}

@@ -1,0 +1,18 @@
+{
+  "server_id": "example-host",
+  "data_dir": "/var/lib/one-minihouse-server-health",
+  "containers": ["one-minihouse-gateway-1", "one-minihouse-storage-ingestor-1", "one-minihouse-modbus-gateway-1"],
+  "health_files": {
+    "gateway": "/opt/one-minihouse/gateway/data/health.json",
+    "ingestor": "/opt/one-minihouse/ingestor/data/health.json",
+    "modbus_gateway": "/opt/one-minihouse/gateway/data-modbus/health.json"
+  },
+  "sls": {
+    "enabled": false,
+    "endpoint": "cn-hangzhou.log.aliyuncs.com",
+    "project": "example-minihouse",
+    "logstore": "server-health",
+    "access_key_id_file": "/etc/one-minihouse-server-health/secrets/access_key_id",
+    "access_key_secret_file": "/etc/one-minihouse-server-health/secrets/access_key_secret"
+  }
+}

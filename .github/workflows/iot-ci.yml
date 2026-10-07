@@ -1,0 +1,75 @@
+name: IoT checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: iot-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: npm install --global pnpm@11.5.0
+      - run: pnpm --dir gateway install --frozen-lockfile --ignore-scripts --no-optional
+      - run: pnpm --dir ingestor install --frozen-lockfile --ignore-scripts
+      - run: pnpm --dir ingestor/cloud install --frozen-lockfile --ignore-scripts
+      - name: Install private D-Bus test daemon
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends dbus-daemon
+      - name: Public source scan, type, protocol, D-Bus and PostgreSQL regressions
+        run: dbus-run-session -- env DBUS_TEST_REQUIRED=1 pwsh -NoProfile -File ./ops/check.ps1 -Postgres
+      - name: Audit gateway runtime dependencies
+        run: pnpm --dir gateway audit --prod --no-optional --registry=https://registry.npmjs.org
+      - name: Worker build without deployment
+        run: pnpm --dir ingestor/cloud build
+      - name: Verify source packaging
+        shell: pwsh
+        run: ./ops/package.ps1 -OutputDirectory "${{ runner.temp }}/one-minihouse-release"
+  images:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [gateway, ingestor]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Build amd64 image from the scanned source archive
+        run: |
+          python ops/public_source.py package --output "$RUNNER_TEMP/source-packages"
+          mkdir -p "$RUNNER_TEMP/unpacked/${{ matrix.component }}"
+          tar -xzf "$RUNNER_TEMP/source-packages/${{ matrix.component }}.tgz" -C "$RUNNER_TEMP/unpacked/${{ matrix.component }}"
+          docker build --platform linux/amd64 --tag one-minihouse-${{ matrix.component }}:ci "$RUNNER_TEMP/unpacked/${{ matrix.component }}"
+  legacy-client:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: npm install --global pnpm@11.5.0
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm build:h5
+      - run: pnpm build:mp-weixin

@@ -1,0 +1,10 @@
+{
+  "id": "temperature-room",
+  "driver": "xiaomi-gateway-v3-temperature",
+  "host": "192.0.2.150",
+  "gatewayDeviceId": 12345678,
+  "sid": "lumi.00000000000001",
+  "credentialsFile": "/run/secrets/xiaomi_gateway_v3",
+  "intervalSeconds": 60,
+  "timeoutSeconds": 10
+}

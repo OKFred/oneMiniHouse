@@ -1,0 +1,13 @@
+**
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!tsconfig.json
+!src/**
+!test/**
+!scripts/*.ts
+!sql/**
+!config/ingestor.example.json
+!config/cpu-core-alerts.example.json
+!config/mqtt-telemetry-clients.example.json
+!LICENSE

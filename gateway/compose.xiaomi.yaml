@@ -1,0 +1,9 @@
+# docker compose -f compose.yaml -f compose.xiaomi.yaml up -d --build gateway
+# Append the device from config/xiaomi.device.example.json to config/local.json.
+services:
+  gateway:
+    secrets:
+      - xiaomi_gateway_v3
+secrets:
+  xiaomi_gateway_v3:
+    file: ./secrets/xiaomi_gateway_v3.json

@@ -1,0 +1,11 @@
+{
+  "admin/statistics/mqtt": {
+    "title": "MQTT 上报",
+    "order": 30,
+    "action": { "type": "view", "path": "statistics/mqtt-ui" },
+    "depends": {
+      "acl": ["luci-app-collectd-mqtt"],
+      "uci": { "collectd_mqtt_ui": true }
+    }
+  }
+}

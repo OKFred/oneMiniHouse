@@ -1,0 +1,19 @@
+{
+  "site_id": "example-home",
+  "gateway_id": "example-gpu-guest",
+  "device_id": "temperature-example-gpu-guest",
+  "interval_seconds": 60,
+  "mqtt": {
+    "url": "mqtts://broker.example.com:8883",
+    "client_id": "example-gpu-guest-temperature",
+    "username": "example-gpu-guest-publisher",
+    "password_file": "/etc/one-minihouse-temperature/mqtt_password"
+  },
+  "queue": {"max_age_days": 7, "max_rows": 100000},
+  "sensors": [],
+  "gpu": {
+    "cache_file": "/run/one-minihouse-nvidia-temperature/readings.json",
+    "metrics": ["gpu_temperature_c"],
+    "max_age_seconds": 120
+  }
+}

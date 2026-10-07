@@ -1,0 +1,21 @@
+[Unit]
+Description=oneMiniHouse bounded server health summary
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/one-minihouse-server-health/health_agent.py --config /etc/one-minihouse-server-health/config.json
+TimeoutStartSec=180
+MemoryMax=64M
+TasksMax=32
+Nice=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/one-minihouse-server-health
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true

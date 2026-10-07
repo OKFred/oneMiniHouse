@@ -1,0 +1,15 @@
+*
+!package.json
+!pnpm-lock.yaml
+!tsconfig.json
+!src/
+!src/**
+!test/
+!test/**
+!config/
+!config/gateway.example.json
+!config/modbus.example.json
+!config/temperature.device.example.json
+!config/xiaomi.device.example.json
+!pnpm-workspace.yaml
+!LICENSE

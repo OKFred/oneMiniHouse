@@ -1,0 +1,32 @@
+#!/bin/sh
+set -eu
+[ -z "${IPKG_INSTROOT:-}" ] || exit 0
+# Refuse installation on unsupported/ambiguous configurations rather than force it.
+. /etc/openwrt_release
+case "$DISTRIB_RELEASE" in 23.05*) ;; *) echo 'This package targets OpenWrt 23.05 only.' >&2; exit 1 ;; esac
+include="$(uci -q get luci_statistics.collectd.Include || true)"
+[ "$include" = '/etc/collectd/conf.d/*.conf' ] || {
+	echo 'Expected collectd Include /etc/collectd/conf.d/*.conf; no configuration was changed.' >&2
+	exit 1
+}
+if grep -Eiq '^[[:space:]]*LoadPlugin[[:space:]]+"?mqtt' /etc/collectd/conf.d/*.conf 2>/dev/null; then
+	for f in /etc/collectd/conf.d/*.conf; do
+		[ "$f" = /etc/collectd/conf.d/90-mqtt-ui.conf ] && continue
+		if grep -Eiq '^[[:space:]]*LoadPlugin[[:space:]]+"?mqtt' "$f"; then
+			echo 'Another MQTT fragment exists; refusing duplicate publisher.' >&2; exit 1
+		fi
+	done
+fi
+[ "$(uci -q get luci_statistics.collectd_mqtt.enable || true)" != 1 ] || {
+	echo 'Another LuCI MQTT publisher is enabled.' >&2; exit 1
+}
+# Protect previous configuration and generator before any package files are installed.
+backup="/root/collectd-mqtt-ui-backups/$(date -u +%Y%m%dT%H%M%SZ)-$$"
+mkdir -p "$backup"
+chmod 700 "$backup"
+cp -p /etc/config/luci_statistics "$backup/"
+cp -p /usr/libexec/stat-genconfig "$backup/"
+for f in /etc/config/collectd_mqtt_ui /etc/collectd/conf.d/90-mqtt-ui.conf; do
+	[ ! -f "$f" ] || cp -p "$f" "$backup/"
+done
+echo "Backup: $backup"

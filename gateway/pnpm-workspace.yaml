@@ -1,0 +1,12 @@
+minimumReleaseAgeExclude:
+  - mqtt@5.16.0
+# pnpm 11.5 can otherwise reuse a stale installation after override changes.
+optimisticRepeatInstall: false
+
+# noble uses patch-package only to create upstream native prebuilds. This
+# gateway uses its JavaScript D-Bus backend and disables lifecycle scripts.
+# dbus-next has no newer release; keep its API and scope the XML parser fix
+# to this version. dependency-compat.test.ts checks parsing and D-Bus RPC.
+overrides:
+  '@stoprocent/noble@2.8.0>patch-package': '-'
+  'dbus-next@0.10.2>xml2js': '0.6.2'

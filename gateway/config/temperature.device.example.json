@@ -1,0 +1,15 @@
+{
+  "id": "temperature-host",
+  "driver": "linux-temperature-ssh",
+  "host": "192.0.2.206",
+  "port": 22,
+  "username": "example-temperature",
+  "identityFile": "/run/secrets/temperature_ssh_key",
+  "knownHostsFile": "/run/secrets/temperature_known_hosts",
+  "intervalSeconds": 60,
+  "timeoutSeconds": 15,
+  "sensors": [
+    {"selector": "thermal:cpu-thermal:temp", "metric": "cpu_temperature_c"},
+    {"selector": "thermal:ddr-thermal:temp", "metric": "ddr_temperature_c"}
+  ]
+}

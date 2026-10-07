@@ -1,0 +1,4 @@
+# Linux containers and host scripts must keep LF line endings.
+gateway/** text=auto eol=lf
+ingestor/** text=auto eol=lf
+ops/** text=auto eol=lf

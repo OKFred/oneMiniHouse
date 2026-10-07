@@ -1,0 +1,8 @@
+{
+  "Version": "1",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["log:PostLogStoreLogs"],
+    "Resource": ["acs:log:cn-hangzhou:*:project/example-minihouse/logstore/server-health"]
+  }]
+}

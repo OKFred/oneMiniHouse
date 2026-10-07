@@ -1,0 +1,7 @@
+{
+  "luci-app-collectd-mqtt": {
+    "description": "Manage collectd MQTT publisher settings",
+    "read": { "uci": ["collectd_mqtt_ui"] },
+    "write": { "uci": ["collectd_mqtt_ui"] }
+  }
+}

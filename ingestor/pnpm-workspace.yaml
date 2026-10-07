@@ -1,0 +1,4 @@
+allowBuilds:
+  protobufjs: false
+minimumReleaseAgeExclude:
+  - mqtt@5.16.0

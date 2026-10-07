@@ -1,0 +1,36 @@
+name: one-minihouse
+services:
+  gateway:
+    build: .
+    image: one-minihouse-gateway:0.1.0
+    platform: linux/amd64
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    pids_limit: 64
+    stop_grace_period: 40s
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    environment:
+      CONFIG_FILE: /app/config/gateway.json
+      DATA_DIR: /app/data
+      DBUS_SYSTEM_BUS_ADDRESS: unix:path=/run/bluez-proxy/bus
+    volumes:
+      - ./config/local.json:/app/config/gateway.json:ro
+      - ./data:/app/data
+      - /mnt/one-minihouse-bluez-131:/run/bluez-proxy:ro
+    secrets: [mqtt_password]
+    healthcheck:
+      test: [CMD, node, src/healthcheck.ts]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+    logging:
+      driver: json-file
+      options: { max-size: 10m, max-file: "3" }
+secrets:
+  mqtt_password:
+    file: ./secrets/mqtt_password

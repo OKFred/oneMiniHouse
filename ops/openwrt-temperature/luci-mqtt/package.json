@@ -1,0 +1,11 @@
+{
+  "name": "@one-minihouse/luci-collectd-mqtt",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test test/package.test.mjs"
+  },
+  "license": "MIT"
+}

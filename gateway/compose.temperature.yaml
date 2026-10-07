@@ -1,0 +1,10 @@
+# Add after compose.yaml (and compose.xiaomi.yaml when enabled).
+# The SSH key is restricted on each host to read-temperatures.sh only.
+services:
+  gateway:
+    secrets: [temperature_ssh_key, temperature_known_hosts]
+secrets:
+  temperature_ssh_key:
+    file: ./secrets/temperature_ssh_key
+  temperature_known_hosts:
+    file: ./secrets/temperature_known_hosts

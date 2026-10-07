@@ -1,0 +1,46 @@
+[Unit]
+Description=Whitelisted SATA SMART temperature cache (read commands only)
+ConditionPathExists=/etc/one-minihouse-smart-temperature/config.json
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/bin/python3 -I -B /opt/one-minihouse-smart-temperature/smart_reader.py
+Environment=PYTHONDONTWRITEBYTECODE=1
+RuntimeDirectory=one-minihouse-smart-temperature
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+TimeoutStartSec=45
+TimeoutStopSec=5
+KillMode=control-group
+MemoryMax=64M
+TasksMax=4
+UMask=0022
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+PrivateDevices=no
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/etc/one-minihouse-smart-temperature /opt/one-minihouse-smart-temperature /dev
+ReadWritePaths=/run/one-minihouse-smart-temperature
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=CAP_SYS_RAWIO
+# Prefer explicitly verified SAT transport. Linux's legacy ATA HDIO_DRIVE_CMD
+# also requires CAP_SYS_ADMIN; this unit intentionally does not grant it.
+# A denied legacy power check may be reported by smartctl as SLEEP (-1).
+DevicePolicy=closed
+# install-smart.sh writes validated stable per-host DeviceAllow entries. Without them,
+# all disks remain inaccessible. Read access does not restrict ioctl payloads;
+# the fixed trusted helper command is essential to the read-only boundary.
+SystemCallFilter=~@mount @reboot @swap @module @debug

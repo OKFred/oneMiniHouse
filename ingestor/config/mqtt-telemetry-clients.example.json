@@ -1,0 +1,30 @@
+{
+  "mqtt": {
+    "url": "mqtts://mqtt.example.com:8883",
+    "clientId": "one-minihouse-ingestor-example-gateway",
+    "username": "example_observer",
+    "passwordFile": "/run/secrets/mqtt_password",
+    "topicPrefixes": [
+      "iot/v1/example-home/example-gateway",
+      "iot/v1/example-home/example-modbus",
+      "iot/v1/example-home/example-host-a",
+      "iot/v1/example-home/example-host-b",
+      "iot/v1/example-home/example-host-c"
+    ],
+    "frameTopicPrefixes": [
+      "iot/v1/example-home/example-gateway",
+      "iot/v1/example-home/example-modbus"
+    ],
+    "telemetryClients": [
+      {
+        "clientId": "one-minihouse-ingestor-example-temperatures",
+        "topicPrefixes": [
+          "iot/v1/example-home/example-host-a",
+          "iot/v1/example-home/example-host-b",
+          "iot/v1/example-home/example-host-c"
+        ]
+      }
+    ],
+    "sessionExpirySeconds": 604800
+  }
+}

@@ -1,0 +1,6 @@
+data/
+evidence/
+config.local.json
+secrets/
+__pycache__/
+*.tar.gz

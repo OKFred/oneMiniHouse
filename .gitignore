@@ -1,0 +1,71 @@
+.DS_Store
+node_modules
+/dist
+/mtk/url.js
+/src/wxcomponents/*
+!/src/wxcomponents/ec-canvas/
+ 
+# local env files
+.env.local
+.env.*.local
+env.json
+ 
+# Log files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+ 
+# Editor directories and files
+.idea
+.vscode
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Local captures and third-party reverse-engineering tools (not project source)
+*.har
+/SocketBLE-*/
+/SocketBLE-*.zip
+/SIDE-CHAT-HANDOFF-*.md
+/.local/
+
+# Runtime state, credentials and verification evidence
+.env
+.env.*
+!.env.example
+!.env.*.example
+**/config/local.json
+**/config/*.local.json
+**/config.local.json
+*.local.sql
+*.local.json
+*.local.yaml
+*.local.yml
+/ops/grafana/*-tabs.json
+/ops/grafana/HISTORY.md
+**/secrets/*
+!**/secrets/.gitkeep
+**/evidence/
+*.sqlite
+*.sqlite-*
+*.db-wal
+*.db-shm
+*.tgz
+*.tar.gz
+
+# Generated caches
+__pycache__/
+*.py[cod]
+.wrangler/
+.pnpm-store/
+
+# Private deployment overrides and developer-only mini-app state
+**/wrangler.local.jsonc
+/project.private.config.json
+
+# Generated from the pinned ECharts package at mini-app build time
+/src/wxcomponents/ec-canvas/echarts.js
+/src/wxcomponents/ec-canvas/LICENSE.echarts
+/src/wxcomponents/ec-canvas/NOTICE.echarts

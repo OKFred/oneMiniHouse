@@ -1,0 +1,12 @@
+[Unit]
+Description=Read whitelisted SATA SMART temperatures every 60 seconds
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=60
+AccuracySec=1
+RandomizedDelaySec=0
+Unit=one-minihouse-smart-temperature.service
+
+[Install]
+WantedBy=timers.target

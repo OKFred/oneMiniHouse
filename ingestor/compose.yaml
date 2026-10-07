@@ -1,0 +1,31 @@
+name: one-minihouse-storage
+services:
+  ingestor:
+    build: .
+    image: one-minihouse-ingestor:0.1.0
+    platform: linux/amd64
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    pids_limit: 64
+    stop_grace_period: 35s
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    environment:
+      CONFIG_FILE: /app/config/ingestor.json
+      DATA_DIR: /app/data
+    volumes:
+      - ./config/local.json:/app/config/ingestor.json:ro
+      - ./data:/app/data
+      - ./secrets:/run/secrets:ro
+    healthcheck:
+      test: [CMD, node, src/healthcheck.ts]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    logging:
+      driver: json-file
+      options: { max-size: 10m, max-file: "3" }

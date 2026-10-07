@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "devices": [
+    {
+      "uuid": "GPU-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "expected_model": "EXAMPLE NVIDIA GPU",
+      "device_node": "/dev/nvidia0",
+      "metric": "gpu_temperature_c"
+    }
+  ]
+}
