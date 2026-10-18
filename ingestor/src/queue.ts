@@ -14,6 +14,7 @@ export interface QueueOptions {
 }
 export interface Processor { id:string;version:string;process:(raw:RawRecord)=>RecordRow }
 const DAY = 86400000;
+const STARTUP_BATCH_SIZE = 500;
 const rawColumns = ['raw_id','topic','source_kind','source_id','source_message_id','source_site_id','source_gateway_id','source_device_id','data_kind','content_type','raw_data','raw_data_sha256','generate_time_utc','receive_time_utc','store_time_utc','expire_time_utc'] as const;
 export class Queue {
   private db: DatabaseSync;
@@ -63,6 +64,9 @@ export class Queue {
         frame_id TEXT PRIMARY KEY,collection_id TEXT NOT NULL,frame_json TEXT NOT NULL,raw_data_sha256 TEXT NOT NULL,
         frame_time_utc INTEGER NOT NULL,receive_time_utc INTEGER NOT NULL,store_time_utc INTEGER NOT NULL,expire_time_utc INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS frame_expiry ON protocol_frame(expire_time_utc);
+      -- A non-unique SQLite index orders equal keys by rowid, preserving the
+      -- capacity eviction tie-break without scanning retained frame payloads.
+      CREATE INDEX IF NOT EXISTS frame_store_order ON protocol_frame(store_time_utc);
       CREATE TABLE IF NOT EXISTS delivery_job (
         artifact_id TEXT NOT NULL,artifact_kind TEXT NOT NULL CHECK(artifact_kind IN ('raw','processed','frame')),raw_id TEXT,
         target_id TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('pending','done','failed')),attempts INTEGER NOT NULL DEFAULT 0,last_error TEXT,
@@ -95,12 +99,46 @@ export class Queue {
     this.tx(()=>{
       // Enabling a mirror later also schedules the still-retained local archive.
       const now=Date.now();
-      if(this.options.rawMirror)this.db.prepare(`INSERT OR IGNORE INTO delivery_job(artifact_id,artifact_kind,raw_id,target_id,status,create_time_utc,update_time_utc) SELECT raw_id,'raw',raw_id,'d1','pending',store_time_utc,? FROM raw_message WHERE expire_time_utc>?`).run(now,now);
-      if(this.options.frameMirror)this.db.prepare(`INSERT OR IGNORE INTO delivery_job(artifact_id,artifact_kind,raw_id,target_id,status,create_time_utc,update_time_utc) SELECT frame_id,'frame',NULL,'sls','pending',store_time_utc,? FROM protocol_frame WHERE expire_time_utc>?`).run(now,now);
-      this.db.exec(`INSERT OR IGNORE INTO pending_raw SELECT raw_id FROM processing_job WHERE status='pending';
-        INSERT OR IGNORE INTO pending_raw SELECT raw_id FROM delivery_job WHERE raw_id IS NOT NULL AND status!='done';
-        UPDATE counts SET value=(SELECT count(*) FROM pending_raw) WHERE name='outstanding_raw';`);
+      if(this.options.rawMirror)this.backfillMirror('d1',now);
+      if(this.options.frameMirror)this.backfillMirror('sls',now);
+      this.backfillPending();
+      this.db.exec(`UPDATE counts SET value=(SELECT count(*) FROM pending_raw) WHERE name='outstanding_raw';`);
     });
+  }
+  private backfillMirror(target:'d1'|'sls',now:number) {
+    const [table,id,kind]=target==='d1'?['raw_message','raw_id','raw']:['protocol_frame','frame_id','frame'];
+    // INSERT ... SELECT with triggers can materialize the complete source before
+    // OR IGNORE removes existing jobs. A retained archive can exceed a small /tmp
+    // even on a restart with nothing to backfill. Read only bounded metadata and
+    // insert VALUES; keep the caller's transaction and every existing job intact.
+    const select=this.db.prepare(`SELECT s.rowid AS source_rowid,s.${id} AS artifact_id,s.store_time_utc
+      FROM ${table} s WHERE s.rowid>? AND s.expire_time_utc>?
+      AND NOT EXISTS(SELECT 1 FROM delivery_job d WHERE d.artifact_id=s.${id} AND d.target_id=?)
+      ORDER BY s.rowid LIMIT ?`);
+    const insert=this.db.prepare(`INSERT OR IGNORE INTO delivery_job(artifact_id,artifact_kind,raw_id,target_id,status,create_time_utc,update_time_utc)
+      VALUES(?,?,?,?,'pending',?,?)`);
+    let cursor=0;
+    for(;;){
+      const rows=select.all(cursor,now,target,STARTUP_BATCH_SIZE);
+      if(!rows.length)break;
+      for(const row of rows)insert.run(row.artifact_id,kind,target==='d1'?row.artifact_id:null,target,row.store_time_utc,now);
+      cursor=Number(rows.at(-1)!.source_rowid);
+    }
+  }
+  private backfillPending() {
+    const insert=this.db.prepare('INSERT OR IGNORE INTO pending_raw VALUES(?)');
+    for(const [table,condition] of [['processing_job',"s.status='pending'"],['delivery_job',"s.raw_id IS NOT NULL AND s.status!='done'"]]){
+      const select=this.db.prepare(`SELECT s.rowid AS source_rowid,s.raw_id FROM ${table} s
+        WHERE s.rowid>? AND ${condition} AND NOT EXISTS(SELECT 1 FROM pending_raw p WHERE p.raw_id=s.raw_id)
+        ORDER BY s.rowid LIMIT ?`);
+      let cursor=0;
+      for(;;){
+        const rows=select.all(cursor,STARTUP_BATCH_SIZE);
+        if(!rows.length)break;
+        for(const row of rows)insert.run(row.raw_id);
+        cursor=Number(rows.at(-1)!.source_rowid);
+      }
+    }
   }
   private tx<T>(action:()=>T):T {
     if (this.transaction) return action();

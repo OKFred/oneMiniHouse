@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash,createHmac } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
-import { createCloudRawSink,createFrameSink,slsLogGroup } from '../src/cloud.ts';
+import { createCloudRawSink,createFrameSink,RawArchiveError,slsLogGroup } from '../src/cloud.ts';
+import { permanentDeliveryError } from '../src/database.ts';
 import { convertHistory } from '../src/history.ts';
 import { parseFrame } from '../src/message.ts';
 
@@ -55,5 +56,34 @@ test('SLS documented protobuf/gzip/signature is HTTPS and rejects non-200 delive
     const frame=parseFrame('iot/v1/example-home/gateway/devices/socket/frames',Buffer.from(JSON.stringify({schema_version:1,frame_id:'5b165df5-1815-5bda-aafc-c21df0bcfe10',collection_id:'3a165df5-1815-5bda-aafc-c21df0bcfe10',site_id:'example-home',gateway_id:'gateway',device_id:'socket',direction:'rx',protocol:'modbus-rtu',wire_hex:'58030400000000',frame_time_utc:new Date().toISOString()})),['iot/v1/example-home/gateway']);
     const sink=createFrameSink({endpoint:'cn-hangzhou.log.aliyuncs.com',project:'iot-project',logstore:'protocol-frames',accessKeyIdFile:idFile,accessKeySecretFile:keyFile})!;
     await sink.write(frame);status=503;await assert.rejects(sink.write(frame),/SLS HTTP 503/);
+  }finally{globalThis.fetch=previous;rmSync(dir,{recursive:true,force:true});}
+});
+
+test('raw archive quota/storage errors preserve pending eligibility and bounded retry hints', async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'iot-cloud-limit-test-')),previous=globalThis.fetch;
+  try{
+    const token=join(dir,'token');writeFileSync(token,'test-only-token');
+    const sink=createCloudRawSink({url:'https://example.test/v1/raw/batch',tokenFile:token})!;
+    const record=convertHistory('electricity_energy',{id:1,owner_id:1,create_time_utc:1,consumed_energy:1},historySource).raw;
+    for(const [status,code] of [[429,'D1_DAILY_READ_LIMIT'],[429,'D1_DAILY_WRITE_LIMIT'],[507,'D1_DATABASE_SIZE_LIMIT'],[507,'D1_ACCOUNT_STORAGE_LIMIT']] as const){
+      globalThis.fetch=async()=>Response.json({code,retry_after_seconds:3600,message:'synthetic-private-SQL'},{status});
+      await assert.rejects(sink.write(record),(e:unknown)=>{
+        assert.ok(e instanceof RawArchiveError);assert.equal(e.code,code);assert.equal(e.retryAfterMs,3600000);
+        assert.equal(permanentDeliveryError(e),false);assert.ok(!e.message.includes('synthetic-private-SQL'));return true;
+      });
+    }
+    const bounded=new RawArchiveError(429,{code:'D1_DAILY_WRITE_LIMIT',retry_after_seconds:999999});
+    assert.equal(bounded.retryAfterMs,86405000);
+    for(const seconds of [0,-1,NaN,'3600',1.5])assert.equal(new RawArchiveError(429,{code:'D1_DAILY_READ_LIMIT',retry_after_seconds:seconds}).retryAfterMs,undefined);
+    for(const [status,body] of [[503,{code:'D1_DAILY_WRITE_LIMIT',retry_after_seconds:3600}],[429,{code:'D1_DATABASE_SIZE_LIMIT'}],[507,{code:'RAW_INVALID'}],[429,{code:'__proto__'}],[429,{error:'D1_DAILY_WRITE_LIMIT'}]] as const){
+      globalThis.fetch=async()=>Response.json(body,{status});
+      await assert.rejects(sink.write(record),(e:unknown)=>e instanceof RawArchiveError&&e.code===`RAW_HTTP_${status}`&&e.retryAfterMs===undefined);
+    }
+    globalThis.fetch=async()=>new Response('<html>synthetic-private-SQL</html>',{status:429});
+    await assert.rejects(sink.write(record),(e:unknown)=>e instanceof RawArchiveError&&e.code==='RAW_HTTP_429'&&e.retryAfterMs===undefined);
+    let cancelled=false;
+    globalThis.fetch=async()=>new Response(new ReadableStream({start(controller){controller.enqueue(new Uint8Array(2048));controller.enqueue(new Uint8Array(2049));},cancel(){cancelled=true;}}),{status:429});
+    await assert.rejects(sink.write(record),(e:unknown)=>e instanceof RawArchiveError&&e.code==='RAW_HTTP_429');
+    assert.equal(cancelled,true);
   }finally{globalThis.fetch=previous;rmSync(dir,{recursive:true,force:true});}
 });

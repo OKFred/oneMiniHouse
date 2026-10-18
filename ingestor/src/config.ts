@@ -29,7 +29,11 @@ export function validateConfig(raw: unknown): Config {
   const m = raw.mqtt;
   if (!text(m.url) || !text(m.clientId) || !text(m.username) || !text(m.passwordFile)) throw new Error('MQTT connection fields required');
   const url = new URL(m.url);
-  if (url.protocol !== 'mqtts:' || url.username || url.password) throw new Error('MQTT requires TLS and separate credentials');
+  // MQTT.js treats query.clientId as an override, which would replace our
+  // configured persistent-session identity. Credentials stay in separate files.
+  // Require an explicit authority: WHATWG URL would normalize some malformed
+  // WSS inputs that MQTT.js's legacy URL parser instead routes to localhost.
+  if (!/^(mqtts|wss):\/\/[^/?#%\\\s]+(?:\/|$)/.test(m.url) || /[\\\s]/.test(m.url) || !url.hostname || url.port === '0' || url.username || url.password || url.search || url.hash) throw new Error('MQTT requires mqtts/wss TLS, a host, separate credentials and no query or fragment');
   if (!int(m.sessionExpirySeconds, 60, 604800)) throw new Error('Invalid MQTT session expiry');
   if (!Array.isArray(m.topicPrefixes) || m.topicPrefixes.length < 1 || !m.topicPrefixes.every(v => text(v) && /^iot\/v1\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(v)) || new Set(m.topicPrefixes).size !== m.topicPrefixes.length) throw new Error('Invalid topic prefixes');
   const prefixes = m.topicPrefixes;

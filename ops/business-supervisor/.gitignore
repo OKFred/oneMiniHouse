@@ -1,0 +1,6 @@
+/config.json
+/data/
+/secrets/
+/.env
+/.env.*
+!/.env.example

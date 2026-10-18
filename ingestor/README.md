@@ -34,6 +34,8 @@
 
 MQTT 接口保持兼容：订阅配置前缀下的 `devices/+/telemetry` 和 `devices/+/frames`，不把 retained 的 `state` 或 `status` 当历史采样。协议帧与业务消息通过 `collection_id` 关联，允许分别到达。
 
+`mqtt.url` 支持 `mqtts://` 和 `wss://`，两者均验证 TLS 证书；拒绝明文传输、URL 内嵌凭据、查询串和片段。默认使用 MQTT over TLS。排查网络路径问题时，可先独立验证同一 broker 提供的 WSS 地址（例如 `wss://mqtt.example.com:8084/mqtt`；端口和路径以服务端为准）。验证通过后只修改 URL，保留所有客户端 ID、持久会话和 SQLite 数据；切换后核对 SUBACK、积压补报及各目标入库。WSS 是可选传输方式，不保证能绕过实际网络故障。
+
 `mqtt.topicPrefixes` 控制遥测订阅；可选 `mqtt.frameTopicPrefixes` 只列出需要协议报文的前缀，必须是前者的无重复子集。省略时沿用全部前缀，设为 `[]` 时不订阅报文。只有温度遥测的主机无需占用报文订阅；总订阅数为遥测前缀数 + 报文前缀数 + collectd 精确主题数，部署前核对 broker 的订阅额度。重连时先取消被排除的精确报文订阅，再建立所需订阅；保留持久会话及其待投递消息。
 
 可选 `mqtt.telemetryClients` 将新增温度前缀交给同一进程中的独立 MQTT 连接：每项为 `{ "clientId": "example-ingestor-temperatures", "topicPrefixes": ["iot/v1/example-home/example-host-a"] }`。全局 `mqtt.topicPrefixes` 仍是设备身份白名单，每个附加前缀必须属于该白名单且只能分配一次。主连接保留未分配的遥测、全部已配置报文和 collectd 主题；附加连接只订阅各自的遥测。每个连接最多 10 条订阅，客户端 ID 必须各不相同，并在重启后保持稳定。附加连接共用入库只读订阅账号、TLS 配置、SQLite 队列、告警状态和双库投递任务，不创建第二份数据库写入流程。合成配置片段见 [MQTT 多连接示例](config/mqtt-telemetry-clients.example.json)，需合并到现有配置，不能直接替换生产配置。
@@ -311,6 +313,22 @@ psql 'service=iot-supabase-admin' -v ON_ERROR_STOP=1 -f sql/002-layered-storage-
 这只恢复旧时间列名及旧写入器需要的默认值，保留新增列、历史数据及旧 payload。随后通过保存的旧镜像和原 Compose 恢复旧服务，使用单独保存的旧队列目录；完整保留新 archive，不能将两份 SQLite 文件直接相互覆盖。再次升级前先排空回退期间的旧队列，并核对这段期间的 PG 数据；回退期间旧程序不能产生本版原始归档，应明确记录这段归档缺口。
 
 SQLite 副本、双 PG 和 D1 都不能代替独立备份。备份保留、PG PITR/完整恢复以及未来 PG 集群切换验收应另行制定。
+
+## 业务健康与独立监督
+
+入库服务每 5 秒输出健康摘要，调度心跳与业务降级分开判断。`business_health` 补充逐设备接收、读取、有效读取和已知实际测量时间，以及无效读数计数、事件循环延迟、SQLite 临时文件系统和 WAL 大小。旧补报和重复消息不能推进有效读数状态；网关缓存的读取时间不代表传感器刚刚测量。
+
+这些元数据在 `data/business-health-state.json` 持久保存，不含原始报文或凭据。独立监督程序只读挂载整个 `data/monitor/` 目录内的摘要；不能挂载单个 JSON 文件，因为原子替换后文件挂载可能停留在旧版本。监督容器不需要入库数据库、MQTT 账号或 Docker socket，部署及飞书通知配置见 [业务监督说明](../ops/business-supervisor/README.md)。
+
+Compose 将 `SQLITE_TMPDIR` 指向 `data/sqlite-tmp`，启动时先创建该目录，避免大队列启动整理耗尽 `/tmp` 的 16 MiB tmpfs。更新时保留运行中的 Compose 覆盖文件、数据目录和 MQTT 客户端 ID；升级验收应同时检查有效临时目录及满容量启动、缓存补报和原有数据展示。
+
+## D1 限额与投递退避
+
+原始副本 Worker 区分每日读／写额度、单库容量及账户总容量错误，仅返回固定错误代码与重试时间；未知故障保留原有通用错误。依据 [D1 官方错误文档](https://developers.cloudflare.com/d1/observability/debug-d1/) 分类，日志和响应不会携带原始 SQL、绑定数据或认证信息。限额不是投递成功，也不是应隔离的永久数据错误。
+
+入库进程收到明确限额错误后暂停整个 D1 投递循环，避免通过轮换待发批次绕过退避。每日额度按 Worker 提供的 UTC 零点恢复时间等待，每隔最多一小时探测一次；容量错误也按一小时探测。`targets.d1.retry_after_time_utc` 显示下一次尝试时间。此退避不暂停本地 PG 或 Supabase，未确认记录仍在 SQLite，补报使用原消息 ID；没有新成功回执时不会把目标状态改成正常。
+
+这项改动不增加额度、不自动升级付费套餐，也不删除历史记录。若长期写入需求高于账户配额或接近数据库容量，队列仍会增长，需另外规划原始副本的容量和保留期限。不能把总积压告警当作两端 PG 均失败的证据，应分别查看 `local_pending`、`supabase_pending` 和 `d1_pending`。先更新 Worker 分类接口，再更新入库进程；旧 Worker 的通用 503 无法识别为明确限额。
 
 ## CPU 封装温度与单核心告警
 

@@ -1,0 +1,30 @@
+services:
+  business-supervisor:
+    build: .
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 64m
+    cpus: 0.25
+    pids_limit: 32
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+    volumes:
+      - ${SUPERVISOR_CONFIG:?private config required}:/app/config.json:ro
+      - ${INGESTOR_MONITOR_DIR:?exported monitor directory required}:/observed/ingestor:ro
+      - ${SQLITE_TEMP_DIR:?persistent SQLite temporary directory required}:/observed/sqlite-temp:ro
+      - ${SUPERVISOR_DATA_DIR:?supervisor state directory required}:/app/data:rw
+      - ${FEISHU_WEBHOOK_FILE:?existing webhook file required}:/run/secrets/feishu-webhook:ro
+    healthcheck:
+      test: [CMD, python, /app/supervisor.py, --healthcheck, /app/data/health.json]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: 2m
+        max-file: "2"

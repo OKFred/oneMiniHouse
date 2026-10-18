@@ -8,11 +8,15 @@ import { PostgresSink,errorCode,permanentDeliveryError } from './database.ts';
 import { createCloudRawSink,createFrameSink } from './cloud.ts';
 import { parseJson, type Sample } from './message.ts';
 import { CpuCoreAlerts, validateFeishuWebhook } from './cpu-core-alert.ts';
+import { BusinessHealth } from './business-health.ts';
+import { deliveryRetryDelay } from './delivery-retry.ts';
 
 const config=loadConfig(),dir=process.env.DATA_DIR??'/app/data';
 mkdirSync(dir,{recursive:true});
+if(process.env.SQLITE_TMPDIR)mkdirSync(process.env.SQLITE_TMPDIR,{recursive:true});
 const rawSink=createCloudRawSink(config.archive?.rawMirror),frameSink=createFrameSink(config.archive?.frames);
 const queue=new Queue(join(dir,'inbox.sqlite'),{...config.queue,rawMirror:!!rawSink,frameMirror:!!frameSink});
+const businessHealth=new BusinessHealth(join(dir,'business-health-state.json'),{dataDir:dir});
 const cpuAlerts=config.cpuCoreAlerts?new CpuCoreAlerts(join(dir,'cpu-core-alerts.sqlite'),config.cpuCoreAlerts):undefined;
 const cpuAlertWebhook=config.cpuCoreAlerts?secret(config.cpuCoreAlerts.webhookFile):undefined;
 if(cpuAlertWebhook)validateFeishuWebhook(cpuAlertWebhook);
@@ -20,11 +24,12 @@ const log=(event:string,fields:object={})=>console.log(JSON.stringify({event_tim
 const abort=new AbortController();const stop=()=>abort.abort();
 process.once('SIGTERM',stop);process.once('SIGINT',stop);
 const configuredTargets:DeliveryTarget[]=[...config.targets.map(t=>t.id),...(rawSink?['d1' as const]:[]),...(frameSink?['sls' as const]:[])];
-const targetHealth:Record<string,{error:string|null;last_success_time_utc:string|null;last_retention_skip_time_utc:string|null}>=Object.fromEntries(configuredTargets.map(id=>[id,{error:'NOT_CHECKED',last_success_time_utc:null,last_retention_skip_time_utc:null}]));
+const targetHealth:Record<string,{error:string|null;last_success_time_utc:string|null;last_retention_skip_time_utc:string|null;retry_after_time_utc:string|null}>=Object.fromEntries(configuredTargets.map(id=>[id,{error:'NOT_CHECKED',last_success_time_utc:null,last_retention_skip_time_utc:null,retry_after_time_utc:null}]));
 const mqttConnections=new MqttConnections(config,secret(config.mqtt.passwordFile),(packet,plan)=>{
   try{
     const bytes=Buffer.from(packet.payload);
     const result=receiveConnectionMessage(queue,config,plan,packet);
+    businessHealth.observeAccepted(result,packet.topic,bytes,config.collectdTemperatures);
     // Both commits finish before this connection releases PUBACK. Raw samples
     // and idempotent alert state are shared by every MQTT connection.
     if(cpuAlerts&&result!=='rejected'&&packet.topic.endsWith('/telemetry'))cpuAlerts.observe(parseJson(bytes.toString('utf8')) as Sample);
@@ -42,13 +47,16 @@ const heartbeat=setInterval(()=>{
     const state={heartbeat_time_utc:new Date().toISOString(),...mqttHealth,
       quality:mqttHealth.subscribed&&!mqttHealth.intake_paused&&!stats.delivery_failed&&!stats.processing_failed&&!Object.values(targetHealth).some(h=>h.error)&&!cpuAlertStats?.notification_error?'ok':'degraded',
       archive:{raw_mirror_configured:!!rawSink,frame_mirror_configured:!!frameSink},targets:targetHealth,...stats,
+      business_health:businessHealth.snapshot(),
       ...(cpuAlertStats?{cpu_core_alerts:cpuAlertStats}: {})};
     writeFileSync(join(dir,'health.tmp'),JSON.stringify(state));renameSync(join(dir,'health.tmp'),join(dir,'health.json'));
+    businessHealth.publishHealth(state);
   }catch{log('fatal',{reason:'HEARTBEAT_STORAGE_FAILED'});process.exitCode=1;stop();}
 },5000);
 async function targetLoop(target:DeliveryTarget){
   while(!abort.signal.aborted){
     let ids:string[]=[],delay=500;
+    targetHealth[target].retry_after_time_utc=null;
     const expired=(skipped:string[])=>{
       if(!skipped.length)return;
       queue.doneBatch(target,skipped,'expired');delay=0;
@@ -87,8 +95,13 @@ async function targetLoop(target:DeliveryTarget){
       targetHealth[target].error=errorCode(e);
       for(const id of ids)queue.failed(target,id,errorCode(e),permanentDeliveryError(e));
       log('delivery_retry',{target,count:ids.length,code:errorCode(e)});
-      // Each job has its own backoff: a malformed record cannot hold later jobs indefinitely.
-      delay=250;
+      // Normal errors retain per-job backoff. A documented D1 limit pauses this
+      // target's loop, preserving pending rows while the two PG loops continue.
+      delay=deliveryRetryDelay(target,e);
+      if(delay>250){
+        targetHealth[target].retry_after_time_utc=new Date(Date.now()+delay).toISOString();
+        log('target_cooldown',{target,code:errorCode(e),retry_after_time_utc:targetHealth[target].retry_after_time_utc});
+      }
     }
     try{await sleep(delay,undefined,{signal:abort.signal});}catch{break;}
   }
@@ -120,4 +133,4 @@ async function cpuAlertLoop(){
 }
 log('ingestor_started',{targets:configuredTargets,target_retention_days:Object.fromEntries(sinks.map(({target,sink})=>[target,sink.retentionDays??null])),...queue.stats()});
 await Promise.all([...configuredTargets.map(targetLoop),retentionLoop(),cpuAlertLoop()]);
-clearInterval(heartbeat);await mqttConnections.stop();await Promise.allSettled(sinks.map(s=>s.sink.close()));cpuAlerts?.close();queue.close();log('ingestor_stopped');
+clearInterval(heartbeat);await mqttConnections.stop();await Promise.allSettled(sinks.map(s=>s.sink.close()));cpuAlerts?.close();await businessHealth.close();queue.close();log('ingestor_stopped');

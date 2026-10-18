@@ -8,12 +8,43 @@ export interface CloudRawConfig { url: string; tokenFile: string; timeoutMs?: nu
 export interface FrameSinkConfig { endpoint: string; project: string; logstore: string; accessKeyIdFile: string; accessKeySecretFile: string; securityTokenFile?: string; timeoutMs?: number }
 export interface CloudRawSink { write(raw: RawRecord): Promise<void>; writeBatch(raw: RawRecord[]): Promise<void> }
 export interface FrameSink { write(frame: FrameRecord): Promise<void> }
+const archiveLimitStatuses: Record<string, number> = {
+  D1_DAILY_READ_LIMIT: 429, D1_DAILY_WRITE_LIMIT: 429,
+  D1_DATABASE_SIZE_LIMIT: 507, D1_ACCOUNT_STORAGE_LIMIT: 507,
+};
 export class RawArchiveError extends Error {
   code: string;
-  constructor(status: number) {
+  readonly retryAfterMs?: number;
+  constructor(status: number, details?: unknown) {
     super(`Raw archive HTTP ${status}`);
     this.code=status===400?'RAW_INVALID':status===409?'RAW_CONFLICT':status===413?'RAW_TOO_LARGE':`RAW_HTTP_${status}`;
+    if (details && typeof details === 'object' && !Array.isArray(details)) {
+      const {code,retry_after_seconds:seconds} = details as Record<string,unknown>;
+      if (typeof code === 'string' && Object.hasOwn(archiveLimitStatuses,code) && archiveLimitStatuses[code] === status) {
+        this.code=code;
+        if (typeof seconds === 'number' && Number.isSafeInteger(seconds) && seconds > 0) this.retryAfterMs=Math.min(seconds,86405)*1000;
+      }
+    }
   }
+}
+
+async function archiveFailure(response: Response): Promise<RawArchiveError> {
+  // Error bodies are untrusted: accept only the bounded, fixed-code contract.
+  // Unknown upstream errors keep the existing status-based retry behavior.
+  if (![429,507].includes(response.status)) { await response.body?.cancel(); return new RawArchiveError(response.status); }
+  const reader=response.body?.getReader();
+  if (!reader) return new RawArchiveError(response.status);
+  const chunks:Uint8Array[]=[];let size=0;
+  try {
+    for (;;) {
+      const part=await reader.read();if(part.done)break;
+      size+=part.value.byteLength;
+      if(size>4096){await reader.cancel();return new RawArchiveError(response.status);}
+      chunks.push(part.value);
+    }
+    return new RawArchiveError(response.status,JSON.parse(Buffer.concat(chunks).toString('utf8')));
+  } catch { return new RawArchiveError(response.status); }
+  finally { reader.releaseLock(); }
 }
 
 export function createCloudRawSink(config?: CloudRawConfig): CloudRawSink | undefined {
@@ -25,7 +56,7 @@ export function createCloudRawSink(config?: CloudRawConfig): CloudRawSink | unde
     if (!records.length) return;
     if (records.length > 32) throw new Error('Raw archive batches are limited to 32 records');
     const response = await fetch(url, { method: 'POST', redirect: 'error', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ schema_version: 1, records }), signal: AbortSignal.timeout(config.timeoutMs ?? 15000) });
-    if (!response.ok) { await response.body?.cancel(); throw new RawArchiveError(response.status); }
+    if (!response.ok) throw await archiveFailure(response);
     // A transport success alone is not a durable-delivery acknowledgment.
     const reader = response.body?.getReader();
     if (!reader) throw new Error('Raw archive acknowledgment missing');

@@ -1,0 +1,28 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "example-raw-archive",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-19",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "triggers": { "crons": ["17 0 * * *"] },
+  // Verify the existing expiry index and <=180-day record contract on all
+  // bindings. Reserve normal ingestion quota before choosing the row budget.
+  "vars": { "ALLOWED_SITE_ID": "example-home", "D1_RETENTION_DAYS": "7", "D1_CLEANUP_MAX_ROWS": "35000" },
+  "d1_databases": [
+    {
+      "binding": "RAW_DB",
+      "database_name": "example-raw-archive-current",
+      "database_id": "11111111-1111-1111-1111-111111111111",
+      "migrations_dir": "migrations"
+    },
+    {
+      "binding": "RAW_DB_ARCHIVE_1",
+      "database_name": "example-raw-archive-previous",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

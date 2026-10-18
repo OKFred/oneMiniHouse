@@ -89,8 +89,12 @@ def scan(root: Path, names: list[str], literals: list[str], snapshot: dict[str, 
                 # Exact synthetic negative-test inputs, not a broad test-directory exemption.
                 if label == 'webhook' and name == 'ingestor/test/cpu-core-alert.test.ts' and match.group().endswith('/00000000-0000-4000-a000-000000000000'):
                     continue
-                if label == 'connection-password' and name == 'ops/linux-temperature/test_agent.py' and match.group() == 'mqtts://' + 'user:secret@' and text[match.end():].startswith('broker.example.com'):
-                    continue
+                if label == 'connection-password' and match.group() == 'mqtts://' + 'user:secret@':
+                    fixture_hosts = {'ops/linux-temperature/test_agent.py': 'broker.example.com',
+                                     'ingestor/test/mqtt-connections.test.ts': 'mqtt.example.com'}
+                    host = fixture_hosts.get(name)
+                    if host and re.match(re.escape(host) + r'''(?=[/:?#\s'"\)]|$)''', text[match.end():]):
+                        continue
                 findings.append({'path': display_name, 'rule': label, 'line': text[:match.start()].count('\n') + 1})
     return findings
 

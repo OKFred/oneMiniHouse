@@ -16,6 +16,9 @@ services:
     environment:
       CONFIG_FILE: /app/config/ingestor.json
       DATA_DIR: /app/data
+      # SQLite temporary work belongs on the persistent data filesystem, not the
+      # small /tmp tmpfs. Startup creates this directory before opening the queue.
+      SQLITE_TMPDIR: /app/data/sqlite-tmp
     volumes:
       - ./config/local.json:/app/config/ingestor.json:ro
       - ./data:/app/data

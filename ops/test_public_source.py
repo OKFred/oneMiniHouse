@@ -68,6 +68,23 @@ class PublicSourceTests(unittest.TestCase):
             self.assertEqual(findings[0]['rule'], 'path-private-ip')
             self.assertNotIn(address, json.dumps(findings))
 
+    def test_connection_fixture_exemption_requires_exact_file_credentials_and_host(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            name = 'ingestor/test/mqtt-connections.test.ts'
+            target = root / name
+            target.parent.mkdir(parents=True)
+            prefix = 'mqtts://' + 'user:secret@'
+            target.write_text(repr(prefix + 'mqtt.example.com'))
+            self.assertEqual(release.scan(root, [name], []), [])
+            for url in [prefix + 'mqtt.example.com.evil.test', prefix + 'other.example.com',
+                        'mqtts://' + 'user:different-synthetic-secret@mqtt.example.com']:
+                target.write_text(repr(url))
+                self.assertTrue(any(f['rule'] == 'connection-password' for f in release.scan(root, [name], [])))
+            other = 'ingestor/test/another.test.ts'
+            (root / other).write_text(repr(prefix + 'mqtt.example.com'))
+            self.assertTrue(any(f['rule'] == 'connection-password' for f in release.scan(root, [other], [])))
+
     def test_packaging_uses_exact_scanned_bytes_after_source_change(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

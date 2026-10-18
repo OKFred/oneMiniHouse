@@ -92,15 +92,52 @@ class FakeClient extends EventEmitter {
   async endAsync(force: boolean) { assert.equal(force, true); this.ended++; this.connected = false; }
 }
 function fixture(intake: ConstructorParameters<typeof MqttConnections>[2] = () => {}, config: Config = validateConfig(extended())) {
-  const clients: FakeClient[] = [], options: IClientOptions[] = [], events: { event: string; fields?: object }[] = [];
+  const clients: FakeClient[] = [], urls: string[] = [], options: IClientOptions[] = [], events: { event: string; fields?: object }[] = [];
   const timers: { callback: () => void; milliseconds: number; cancelled: boolean }[] = [];
   const connections = new MqttConnections(config, 'synthetic-password', intake, (event, fields) => events.push({ event, fields }), {
-    connect: (_url, option) => { options.push(option); const client = new FakeClient(); clients.push(client); return client as unknown as MqttClient; },
+    connect: (url, option) => { urls.push(url); options.push(option); const client = new FakeClient(); clients.push(client); return client as unknown as MqttClient; },
     schedule: (callback, milliseconds) => { const timer = { callback, milliseconds, cancelled: false }; timers.push(timer); return () => { timer.cancelled = true; }; },
   });
   const runTimer = () => { const timer = timers.find(t => !t.cancelled); assert.ok(timer); timer.cancelled = true; timer.callback(); return timer.milliseconds; };
-  return { clients, connections, options, events, timers, runTimer };
+  return { clients, connections, urls, options, events, timers, runTimer };
 }
+
+test('verified TLS MQTT and WebSocket transports preserve both durable identities and subscriptions', async () => {
+  const baseline = validateConfig(extended());
+  for (const url of ['mqtts://mqtt.example.com:8883', 'wss://mqtt.example.com:8084/mqtt', 'wss://mqtt.example.com/mqtt', 'wss://mqtt.example.com/mqtt%2Fv5']) {
+    const raw = extended(); raw.mqtt.url = url;
+    const config = validateConfig(raw), f = fixture(() => {}, config);
+    assert.deepEqual(mqttConnectionPlans(config), mqttConnectionPlans(baseline));
+    assert.deepEqual(f.urls, [url, url]);
+    assert.deepEqual(f.options.map(option => option.clientId), mqttConnectionPlans(baseline).map(plan => plan.clientId));
+    for (const option of f.options) {
+      assert.equal(option.rejectUnauthorized, true);
+      assert.equal(option.clean, false);
+      assert.equal(option.protocolVersion, 5);
+      assert.equal(option.properties?.sessionExpiryInterval, baseline.mqtt.sessionExpirySeconds);
+    }
+    f.clients.forEach(client => client.open());
+    assert.equal(f.connections.snapshot().subscribed, true);
+    await f.connections.stop();
+  }
+});
+
+test('MQTT URL validation rejects plaintext, inline credentials and persistent-identity overrides', () => {
+  for (const url of [
+    'mqtt://mqtt.example.com:1883', 'ws://mqtt.example.com/mqtt', 'https://mqtt.example.com/mqtt',
+    'mqtts:///mqtt', 'wss:///', 'wss:mqtt.example.com/mqtt', 'wss:////mqtt.example.com/mqtt',
+    'wss://mqtt.example.com:0/mqtt', 'mqtts://mqtt.example.com:0', 'wss://mqtt.example.com/with space',
+    'wss://%6dqtt.example.com/mqtt', 'wss://mqtt%2eexample.com/mqtt',
+    'wss://mqtt.example.com\\mqtt', 'wss://mqtt.example.com/mq\ntt',
+    'mqtts://user:secret@mqtt.example.com', 'wss://user@mqtt.example.com/mqtt',
+    'mqtts://mqtt.example.com?clientId=other-session', 'wss://mqtt.example.com/mqtt?clientId=other-session',
+    'wss://mqtt.example.com/mqtt?%63lientId=other-session', 'wss://mqtt.example.com/mqtt?token=secret',
+    'mqtts://mqtt.example.com#fragment', 'wss://mqtt.example.com/mqtt#fragment',
+  ]) {
+    const config = extended(); config.mqtt.url = url;
+    assert.throws(() => validateConfig(config), url);
+  }
+});
 test('second SUBACK failure is degraded and retries with backoff while primary keeps its durable transport', async () => {
   const f = fixture(); f.clients[1].rejectSubscribe = true;
   f.clients.forEach(client => client.open());
