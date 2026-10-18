@@ -39,7 +39,7 @@
       "user": "example_ingestor.REPLACE_PROJECT_REF",
       "passwordFile": "/run/secrets/supabase_pg_password",
       "tls": true,
-      "retentionDays": 30,
+      "retentionDays": 7,
       "caFile": "/run/secrets/supabase-ca.crt"
     }
   ],

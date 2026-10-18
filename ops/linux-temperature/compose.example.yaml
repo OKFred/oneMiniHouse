@@ -1,0 +1,98 @@
+# Copy to the deployment directory after building/loading the image.
+# Host-specific configuration and this instantiated Compose file stay private.
+name: one-minihouse-temperature
+
+x-common: &common
+  image: ${TEMPERATURE_IMAGE:-one-minihouse-temperature:local}
+  restart: unless-stopped
+  init: true
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 32
+  stop_grace_period: 30s
+  logging:
+    driver: json-file
+    options:
+      max-size: 2m
+      max-file: "3"
+
+services:
+  mqtt:
+    <<: *common
+    user: "10001:10001"
+    mem_limit: 128m
+    environment:
+      CREDENTIALS_DIRECTORY: /run/secrets
+    command: [python3, /app/agent.py, --config, /run/secrets/config.json, --data, /var/lib/one-minihouse-temperature-mqtt]
+    volumes:
+      - type: bind
+        source: /sys
+        target: /sys
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./config/temperature.json
+        target: /run/secrets/config.json
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./secrets/mqtt_password
+        target: /run/secrets/mqtt_password
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./data
+        target: /var/lib/one-minihouse-temperature-mqtt
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./runtime/smart
+        target: /run/one-minihouse-smart-temperature
+        read_only: true
+        bind: {create_host_path: false}
+    healthcheck:
+      test: [CMD, python3, /app/healthcheck.py, --file, /var/lib/one-minihouse-temperature-mqtt/health.json, --max-age-seconds, "${TEMPERATURE_HEALTH_MAX_AGE_SECONDS:-180}"]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+
+  smart:
+    <<: *common
+    user: "0:0"
+    mem_limit: 64m
+    network_mode: none
+    cap_add: [SYS_RAWIO]
+    # Up to eight whitelisted reads can each take five seconds before exit.
+    stop_grace_period: 60s
+    command: [python3, /app/smart_reader.py, --config, /etc/one-minihouse-smart-temperature/config.json, --output, /run/one-minihouse-smart-temperature/readings.json, --interval-seconds, "60"]
+    # Examples only: verify every mapping and stable identity on the host.
+    # Keep the same /dev/sdX name inside; by-id symlinks resolve to that name.
+    devices:
+      - /dev/sdb:/dev/sdb:r
+    volumes:
+      - type: bind
+        source: /sys
+        target: /sys
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: /dev/disk/by-id
+        target: /dev/disk/by-id
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./config/smart.json
+        target: /etc/one-minihouse-smart-temperature/config.json
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./runtime/smart
+        target: /run/one-minihouse-smart-temperature
+        bind: {create_host_path: false}
+    healthcheck:
+      test: [CMD, python3, /app/healthcheck.py, --file, /run/one-minihouse-smart-temperature/readings.json, --timestamp-key, read_time_utc, --max-age-seconds, "180"]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3

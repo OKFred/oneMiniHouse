@@ -1,10 +1,12 @@
 import copy
+import argparse
 import importlib.util
 import json
 import os
 import stat
 import subprocess
 import tempfile
+import threading
 import unittest
 import uuid
 from pathlib import Path
@@ -243,6 +245,119 @@ class SmartReaderTests(unittest.TestCase):
         self.assertEqual(len(config["devices"]), 2)
         for selected in config["devices"]:
             self.assertTrue(selected["expected_serial"].startswith("SYNTHETIC"))
+
+    def test_repeat_interval_has_explicit_bounds(self):
+        for value in ("10", "60", "86400", 60):
+            self.assertEqual(reader.interval_seconds(value), int(value))
+        for value in ("9", "86401", "0", "-1", "60.5", "nan", True, None):
+            with self.subTest(value=value), self.assertRaises(argparse.ArgumentTypeError):
+                reader.interval_seconds(value)
+
+    def test_repeat_uses_serial_monotonic_cadence_without_read_duration_drift(self):
+        clock = SimpleNamespace(now=0)
+        starts, waits = [], []
+        stop = threading.Event()
+        durations = iter((2, 4, 1))
+        def read_batch(config, output):
+            starts.append(clock.now)
+            clock.now += next(durations)
+            if len(starts) == 3:
+                stop.set()
+        def wait(seconds):
+            waits.append(seconds)
+            clock.now += seconds
+        with patch.object(reader, "read_batch", side_effect=read_batch), patch.object(stop, "wait", side_effect=wait):
+            reader.run_loop(self.config(), "/run/example/readings.json", 60, stop, lambda: clock.now)
+        self.assertEqual(starts, [0, 60, 120])
+        self.assertEqual(waits, [58, 56])
+
+    def test_slow_batch_skips_missed_slots_instead_of_bursting(self):
+        clock = SimpleNamespace(now=0)
+        stop = threading.Event()
+        starts, waits = [], []
+        def read_batch(config, output):
+            starts.append(clock.now)
+            clock.now += 65
+            if len(starts) == 2:
+                stop.set()
+        def wait(seconds):
+            waits.append(seconds)
+            clock.now += seconds
+        with patch.object(reader, "read_batch", side_effect=read_batch), patch.object(stop, "wait", side_effect=wait):
+            reader.run_loop(self.config(), "/run/example/readings.json", 60, stop, lambda: clock.now)
+        self.assertEqual(starts, [0, 120])
+        self.assertEqual(waits, [55])
+
+    def test_stopped_loop_does_not_open_a_disk_or_replace_cache(self):
+        stop = threading.Event()
+        stop.set()
+        with patch.object(reader, "read_batch") as read:
+            reader.run_loop(self.config(), "/run/example/readings.json", 60, stop)
+        read.assert_not_called()
+
+    def test_one_shot_default_keeps_cache_timestamp_and_does_not_install_signal_handlers(self):
+        batch = self.collect()
+        config = self.config()
+        with patch.object(reader.sys, "argv", ["smart_reader.py"]), \
+                patch.multiple(reader.os, geteuid=lambda: 0, getegid=lambda: 0, create=True), \
+                patch.object(reader, "load_config", return_value=config), \
+                patch.object(reader, "check_executable"), \
+                patch.object(reader, "collect", return_value=batch) as collect, \
+                patch.object(reader, "write_cache") as write, \
+                patch.object(reader, "run_loop") as loop, \
+                patch.object(reader.signal, "signal") as signal, \
+                patch("builtins.print") as emit:
+            self.assertEqual(reader.main(), 0)
+        collect.assert_called_once_with(config)
+        write.assert_called_once_with(reader.DEFAULT_OUTPUT, batch)
+        loop.assert_not_called()
+        signal.assert_not_called()
+        logged = json.loads(emit.call_args.args[0])
+        self.assertEqual(logged["read_time_utc"], batch["read_time_utc"])
+        self.assertEqual(emit.call_args.kwargs, {"flush": True})
+
+    def test_check_remains_one_shot_even_with_repeat_interval(self):
+        config = self.config()
+        with patch.object(reader.sys, "argv", ["smart_reader.py", "--check", "--interval-seconds", "60"]), \
+                patch.multiple(reader.os, geteuid=lambda: 0, getegid=lambda: 0, create=True), \
+                patch.object(reader, "load_config", return_value=config), \
+                patch.object(reader, "check_executable"), \
+                patch.object(reader, "resolved_devices") as resolve, \
+                patch.object(reader, "read_batch") as read, \
+                patch.object(reader, "run_loop") as loop, patch("builtins.print"):
+            self.assertEqual(reader.main(), 0)
+        resolve.assert_called_once_with(config)
+        read.assert_not_called()
+        loop.assert_not_called()
+
+    def test_term_and_interrupt_wake_idle_wait_and_restore_previous_handlers(self):
+        for selected_signal in (reader.signal.SIGTERM, reader.signal.SIGINT):
+            with self.subTest(signal=selected_signal):
+                stop = threading.Event()
+                installed, restored = {}, []
+                original_handlers = {kind: object() for kind in (reader.signal.SIGTERM, reader.signal.SIGINT)}
+                def signal(kind, handler):
+                    if handler is original_handlers[kind]:
+                        restored.append(kind)
+                    else:
+                        installed[kind] = handler
+                    return original_handlers[kind]
+                def wait(_seconds):
+                    installed[selected_signal](selected_signal, None)
+                    return stop.is_set()
+                with patch.object(reader.sys, "argv", ["smart_reader.py", "--interval-seconds", "60"]), \
+                        patch.multiple(reader.os, geteuid=lambda: 0, getegid=lambda: 0, create=True), \
+                        patch.object(reader, "load_config", return_value=self.config()), \
+                        patch.object(reader, "check_executable"), \
+                        patch.object(reader.threading, "Event", return_value=stop), \
+                        patch.object(reader.signal, "signal", side_effect=signal), \
+                        patch.object(stop, "wait", side_effect=wait) as waited, \
+                        patch.object(reader, "read_batch") as read:
+                    self.assertEqual(reader.main(), 0)
+                self.assertTrue(stop.is_set())
+                self.assertEqual(waited.call_count, 1)
+                self.assertEqual(read.call_count, 1)
+                self.assertEqual(set(restored), set(original_handlers))
 
     @unittest.skipUnless(hasattr(os, "geteuid") and os.geteuid() == 0, "root Linux filesystem test; never opens hardware")
     def test_atomic_public_cache_and_symlink_rejection(self):

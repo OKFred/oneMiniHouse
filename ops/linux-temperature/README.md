@@ -2,6 +2,8 @@
 
 每台 Linux 主机自己读取 sysfs，通过 MQTT 5 + TLS + QoS 1 上报；采集服务器订阅并沿用现有原始层、双 PostgreSQL 和 Grafana 链路。MQTT 代理无需 SSH 采集账号、SSH 密钥、sudo、Docker 或入站服务。可选的 SATA SMART 和 NVIDIA GPU 温度由独立 helper 读取固定白名单设备，代理只消费其缓存。
 
+需要镜像部署及集中管理配置、凭据和采集队列时，参见 [Docker 部署与迁移](DOCKER.md)。
+
 使用发行版的 Python 3、`python3-paho-mqtt` 2.x 和 systemd。服务通过 DynamicUser 运行，凭据由 systemd LoadCredential 交付，不能访问用户目录或原始磁盘设备。主机维护各自的 MQTT 账号，只允许发布自己的主题；禁止订阅及跨主机发布。入库账号单独增加这些主题的订阅权限。
 
 ## 配置与部署

@@ -10,9 +10,12 @@ import json
 import math
 import os
 import re
+import signal
 import stat
 import subprocess
 import sys
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -343,11 +346,50 @@ def write_cache(output, batch):
         os.close(directory)
 
 
+def interval_seconds(value):
+    try:
+        interval = int(value)
+    except (TypeError, ValueError) as error:
+        raise argparse.ArgumentTypeError("interval must be an integer from 10 to 86400 seconds") from error
+    if str(interval) != str(value) or not 10 <= interval <= 86400:
+        raise argparse.ArgumentTypeError("interval must be an integer from 10 to 86400 seconds")
+    return interval
+
+
+def read_batch(config, output):
+    batch = collect(config)
+    write_cache(output, batch)
+    print(encode({"event": "smart_read_completed", "read_time_utc": batch["read_time_utc"],
+                  "channels": len(batch["metrics"]), "missing": len(batch["missing_metrics"])}), flush=True)
+
+
+def run_loop(config, output, interval, stop, monotonic=time.monotonic):
+    """Serial reads on a monotonic cadence, without bursts after a slow batch.
+
+    SIGTERM/SIGINT wake the idle wait immediately. An in-progress batch finishes
+    with the existing per-device timeout (at most eight sequential five-second
+    commands), preserving its original read timestamps and atomic cache write.
+    """
+    interval = interval_seconds(interval)
+    next_read = monotonic()
+    while not stop.is_set():
+        read_batch(config, output)
+        if stop.is_set():
+            break
+        next_read += interval
+        now = monotonic()
+        if next_read <= now:
+            next_read += (int((now - next_read) // interval) + 1) * interval
+        stop.wait(max(0, next_read - now))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default=DEFAULT_CONFIG)
     parser.add_argument("--output", default=DEFAULT_OUTPUT)
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--interval-seconds", type=interval_seconds,
+                        help="repeat on this cadence; omitted for the existing one-shot mode")
     args = parser.parse_args()
     try:
         if os.geteuid() != 0 or os.getegid() != 0:
@@ -358,10 +400,17 @@ def main():
             resolved_devices(config)
             print("SMART configuration and block paths valid; identity requires an active read")
             return 0
-        batch = collect(config)
-        write_cache(args.output, batch)
-        print(encode({"event": "smart_read_completed", "read_time_utc": batch["read_time_utc"],
-                      "channels": len(batch["metrics"]), "missing": len(batch["missing_metrics"])}))
+        if args.interval_seconds is None:
+            read_batch(config, args.output)
+        else:
+            stop = threading.Event()
+            handlers = {kind: signal.signal(kind, lambda _kind, _frame: stop.set())
+                        for kind in (signal.SIGTERM, signal.SIGINT)}
+            try:
+                run_loop(config, args.output, args.interval_seconds, stop)
+            finally:
+                for kind, handler in handlers.items():
+                    signal.signal(kind, handler)
         return 0
     except (OSError, ValueError):
         # Never print file paths, identities, smartctl output or exception text.

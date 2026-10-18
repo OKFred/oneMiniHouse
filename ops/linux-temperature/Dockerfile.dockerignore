@@ -1,0 +1,15 @@
+# Only these source files enter the root build context. No configuration,
+# credentials, .git history, runtime databases or deployment evidence is sent.
+**
+!ops/
+ops/**
+!ops/linux-temperature/
+ops/linux-temperature/**
+!ops/linux-temperature/Dockerfile
+!ops/linux-temperature/Dockerfile.dockerignore
+!ops/linux-temperature/agent.py
+!ops/linux-temperature/smart_reader.py
+!ops/linux-temperature/healthcheck.py
+!ops/host-temperature/
+ops/host-temperature/**
+!ops/host-temperature/read-temperatures.sh

@@ -116,13 +116,19 @@ PG 的 `raw_id` 没有指向短期原始层的外键，原始清理不会级联�
 
 ## 保留、容量与重放
 
-默认业务原始层在本地和 D1 保留 **180 天**，按保存时间滚动清理；本地每天分批执行，不是每半年一次性清空。协议帧本地及 SLS 目标保留 **30 天**，SLS Logstore 需要在服务端配置对应 TTL。本地 PG 保留完整加工历史，不跟随原始层清理。Supabase 目标单独设置 `retentionDays: 30`，保留滚动 **30 × 24 小时**的加工数据；派生视图只查询各自数据库仍保留的数据。
+默认业务原始层在本地和 D1 保留 **180 天**，按保存时间滚动清理；本地每天分批执行，不是每半年一次性清空。协议帧本地及 SLS 目标保留 **30 天**，SLS Logstore 需要在服务端配置对应 TTL。本地 PG 保留完整加工历史，不跟随原始层清理。Supabase 示例目标单独设置 `retentionDays: 7`，保留滚动 **7 × 24 小时**的加工数据；保持原有每分钟采集和写入频率，不做降采样。本地 PG、SQLite、MQTT 和单核心告警的频率均不改变；派生视图只查询各自数据库仍保留的数据。修改示例文件不会更新线上配置，必须单独调整实际运行的 Supabase 目标并读回确认。
 
 Supabase 写入前以 `coalesce(sample_time_utc, read_time_utc, source_receive_time_utc, receive_time_utc)` 判断年龄。旧实时 MQTT 的 `captured_at` 在新版处理器中对应 `read_time_utc`。严格早于截止时刻的记录跳过，恰好位于边界的记录仍可写入；采样时间未知的历史记录使用已知来源接收时间，不伪造采样时间。补发、历史导入和手工重放均执行同一规则，不能把已过期历史重新灌入 Supabase。
 
 过期只结束 Supabase 的投递任务：`delivery_job.status='done'`、`outcome='expired'`，增加持久计数 `supabase_retention_skipped` 并记录 `retention_skipped` 日志；不会冒充数据库确认或更新 `last_success_time_utc`。数据库确认的结果为 `outcome='confirmed'`，包括哈希一致的幂等重复。旧版已完成任务的 `outcome=NULL` 表示未分类的既有记录。重复完成不会重复计数，显式重新激活任务后再次跳过会计为一次新的跳过处理。SQLite 原文、本地 PG 和 D1 任务均不受 Supabase 过期影响，未完成的本地任务继续重试。
 
-写入过滤不能清除已经存入 Supabase、随后变旧的记录。由 Supabase 管理员单独安装定时清理；运行账号继续仅有 SELECT / INSERT，无需 DELETE 权限。[管理员清理脚本](sql/supabase/retention-30d.sql) 使用 `pg_cron`、UTC 会话及相同时间判断，每天分 8 次小事务、每次最多删除 1,000 条。此脚本仅用于 Supabase，不会被 `pnpm migrate` 自动执行；实际安装与验收需在自己的实例上单独完成。删除发生于下一次定时执行，云端可能暂存超过 30 天的行；超过每日 8,000 条的淘汰量需调整管理员任务。回退定时任务使用脚本末尾的 `cron.unschedule`，不删除扩展或其他任务；被清理的数据应从本地 PG 或独立备份恢复，且恢复写入仍受当前 Supabase 窗口限制。
+写入过滤不能清除已经存入 Supabase、随后变旧的记录。由 Supabase 管理员单独安装[七天清理任务](sql/supabase/retention-7d.sql)：`pg_cron` 每 15 分钟执行一次，每次最多删除 1,000 条；理论上限 96,000 条/天，锁竞争、超时和故障会降低实际吞吐。旧[三十天脚本](sql/supabase/retention-30d.sql) 保留作为旧部署依据，不再用于七天配置；其每天最多 8,000 条的清理量不足以应对更大的日新增量。新脚本仅替换当前所有者的已知旧任务；旧命令、所有者或索引定义不匹配时停止，不能直接删掉检查绕过。沿用既有 `telemetry_retention_30d_time_v2` 索引，名称中的 `30d` 不影响七天条件，不另建一份七天索引。不修改全局 `cron.timezone`、其他任务或授权，运行账号无需 DELETE 权限。
+
+这些管理员脚本不会被 `pnpm migrate` 或容器启动自动执行。先运行[只读预览](sql/supabase/retention-7d-preview.sql)，核对云端库、七天截止时间、过期行数、每天新增量、索引和定时任务；再按脚本 A、B、C 三节分开执行，`CREATE INDEX CONCURRENTLY` 必须单独提交。安装前先将实际 Supabase 写入配置设为七天，防止补报重新写入已过期历史。已有积压可在确认清理范围后，由管理员单次执行[最多 10,000 行的清理批次](sql/supabase/retention-7d-cleanup-batch.sql)，逐批观察删除数量和服务状态，不在一个长事务或无限循环里清空。仅删除严格早于七天截止时间的 `iot.telemetry` 云端行，不触碰本地 PG、原始归档或其他业务表。
+
+定时删除存在执行延迟，不能仅凭任务已创建就宣称云端只剩七天；验收需检查后续运行状态及剩余过期行数。回退仅停止同名七天任务，不删除扩展、索引或其他任务，也不能恢复已经删除的行。需要恢复历史时从本地 PG 另行安排，写入仍受当前 Supabase 窗口限制。七天保留也不保证满足免费额度：必须分别检查实际数据库空间和平台其他用量。
+
+删除后的普通 `VACUUM (ANALYZE) iot.telemetry` 主要让空间供表内复用，不保证平台显示的数据库文件立即缩小。若清理完成后确实需要归还文件空间，`VACUUM (FULL, ANALYZE) iot.telemetry` 只能作为**单独确认的维护操作**：由管理员在事务块外单独提交，只针对该表，事先核实额外临时磁盘空间并协调入库暂停/SQLite 缓存补报窗口。它会重写整表并持有排他锁，阻塞该表的读写；不加入自动清理、不对全库执行，不能在存储已满时盲目尝试。执行前设置短 `lock_timeout`、完成后恢复会话设置；失败或等待锁时先检查，不能反复强行重试。参见 [PostgreSQL VACUUM 文档](https://www.postgresql.org/docs/current/sql-vacuum.html)和 [Supabase Cron 文档](https://supabase.com/docs/guides/cron/quickstart)。
 
 待处理任务或未确认投递会暂时保住对应业务原始记录。`maxPending` 默认 100,000，按尚有依赖的原始记录计数；达到上限后暂停业务接收，保留待发记录。永久失败也需要检查处理，不能靠扩大上限长期掩盖故障。
 
@@ -163,7 +169,7 @@ chmod 700 secrets
 
 在被忽略的 `config/local.json` 设置实际 MQTT 前缀和两个数据库目标。仓库模板只含文档保留地址和示例账号；本地数据库与 Supabase 项目身份不得写回模板。使用 Supabase 控制台提供的 **Session pooler IPv4** 连接参数，启用 TLS 证书校验，必要时通过 `caFile` 指定根证书。运行账号只需 `iot` schema 的 USAGE、遥测表的 SELECT / INSERT 和相应 RLS 策略；不授予运行服务 DDL 或删除权限。
 
-配置模板在 Supabase 目标设置 `"retentionDays": 30`。该字段可选、取 1–3650 的整数天；省略时兼容原版行为，不做写入年龄过滤。只允许 Supabase 目标设置，防止误将本地长期历史排除。现有私有配置需显式增加该值并重建启动新版本，不能仅凭升级源码认为策略已启用；启动日志 `target_retention_days` 显示实际设置。改变窗口时应同步调整 Supabase 管理员清理任务，两者不会互相自动改配置。
+配置模板在 Supabase 目标设置 `"retentionDays": 7`。该字段可选、取 1–3650 的整数天；省略时兼容原版行为，不做写入年龄过滤。只允许 Supabase 目标设置，防止误将本地长期历史排除。现有私有配置需显式增加该值并重建启动新版本，不能仅凭升级源码认为策略已启用；启动日志 `target_retention_days` 显示实际设置。改变窗口时应同步调整 Supabase 管理员清理任务，两者不会互相自动改配置。
 
 原始云副本与 SLS 按配置启用；未配置不代表已云端备份：
 
@@ -255,7 +261,7 @@ docker compose exec -e VERIFY_DEVICE=meter-main -e VERIFY_LIMIT=10 \
 
 验收至少覆盖：连续 10 轮真实采集、双 PG 相同结果 ID/指标/哈希、D1 对应原始 ID/哈希、SLS `frame_id` 查询；再验证容器重启、单个目标断线恢复、积压补发、重复投递和保留清理。`verify-layered.ts` 的近期窗口匹配不能代替全量历史迁移核对，也不检查 SLS 服务端保留策略。
 
-双 PG 对比只选择 Supabase 30 天窗口内的共同数据。默认最近 100 条适合实时验收，也可用 `VERIFY_AFTER` 指定近期 UTC 起点、`VERIFY_MIN_ROWS=10` 要求至少 10 条，并用 `VERIFY_REQUIRE_LINEAGE=1` 检查新版来源字段。不要用覆盖全部旧历史的窗口要求两端行数一致：超过云端保留期的数据仅存本地 PG 是预期行为，应另查本地总量、历史清单及过期跳过计数。
+双 PG 对比只选择 Supabase 当前七天窗口内的共同数据。默认最近 100 条适合实时验收，也可用 `VERIFY_AFTER` 指定近期 UTC 起点、`VERIFY_MIN_ROWS=10` 要求至少 10 条，并用 `VERIFY_REQUIRE_LINEAGE=1` 检查新版来源字段。不要用覆盖全部旧历史的窗口要求两端行数一致：超过云端保留期的数据仅存本地 PG 是预期行为，应另查本地总量、历史清单及过期跳过计数。
 
 ## 历史电表数据
 
@@ -265,7 +271,7 @@ docker compose exec -e VERIFY_DEVICE=meter-main -e VERIFY_LIMIT=10 \
 
 原 `create_time_utc` 是来源服务器接收时间。历史结果使用 `quality='historical'`、`sample_time_utc=NULL`，把已知时间写入 `source_receive_time_utc` 和来源信息；不伪造测量时间或不存在的协议帧。历史功率单位转换为 W / var；未验证的旧频率偏移、保留寄存器所得视在功率不当成可靠测量迁入。源行完整留在原始层供追溯。
 
-配置 Supabase 30 天窗口后，超期历史仍进入本地 SQLite、按配置投递 D1，并完整写入本地 PG；Supabase 的对应任务记录为过期跳过。源历史导入完成不应再以“全量双 PG 行数相同”验收，只核对两端共同的近期窗口。
+配置 Supabase 七天窗口后，超期历史仍进入本地 SQLite、按配置投递 D1，并完整写入本地 PG；Supabase 的对应任务记录为过期跳过。源历史导入完成不应再以“全量双 PG 行数相同”验收，只核对两端共同的近期窗口。
 
 ```sql
 SELECT sample_time_utc, source_receive_time_utc, device_id, quality,
