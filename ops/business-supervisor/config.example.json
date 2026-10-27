@@ -20,6 +20,7 @@
   "mqtt_client_ids": ["example-ingestor-primary", "example-ingestor-secondary"],
   "targets": ["local", "supabase", "d1"],
   "collector_health_files": [],
+  "host_health_sources": [],
   "storage": [
     {"id": "ingestor-data", "path": "/observed/ingestor", "min_free_bytes": 1073741824, "min_free_fraction": 0.10, "min_free_inode_fraction": 0.10},
     {"id": "sqlite-temp", "path": "/observed/sqlite-temp", "min_free_bytes": 0, "min_free_fraction": 0.10, "min_free_inode_fraction": 0.10}

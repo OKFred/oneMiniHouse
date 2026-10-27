@@ -1,6 +1,6 @@
 # 采集链路监督容器
 
-Python 标准库程序，每 60 秒读取入库服务导出的健康快照，通过现有飞书机器人通知故障和恢复。独立于入库进程运行；不连接 MQTT 或数据库，不重启采集服务、不修改队列，不需要 Docker socket、额外 capabilities 或入站端口。
+Python 标准库程序，每 60 秒读取入库服务导出的健康快照，通过现有飞书机器人通知故障和恢复。可选读取独立 MQTT 接收器导出的主机健康文件。独立于入库进程运行；不连接 MQTT 或数据库，不重启采集服务、不修改队列，不需要 Docker socket、额外 capabilities 或入站端口。
 
 默认 Docker 限额为 64 MiB、0.25 CPU、32 个进程；运行 UID/GID 10001、只读根目录。实际内存和通知到达情况须在目标主机验收。这与 ingestor 同处一台主机，无法单独覆盖整台主机或 Docker 停止；外部心跳告警仍须另行配置和验证，源码模板不能证明 SLS 告警已经启用。
 
@@ -49,6 +49,39 @@ Python 标准库程序，每 60 秒读取入库服务导出的健康快照，通
 只在新鲜且有效的快照提供持续恢复证据后解除故障。待发清空不代表数据库恢复：此前已告警的目标必须有新一次成功写入证据。输入缺失或格式错误不能解除旧故障；已送达的故障才发送恢复通知。飞书没有事务型确认，超时重试可能重复，消息内保留稳定事件 ID 便于识别。
 
 `last_received_time_utc` 表示接收时间，补报不能更新设备采样新鲜度。`last_collect_time_utc` 表示来源提供的采集时间；网关缓存读取可能仍缺少传感器的实际测量时间。默认 `require_actual_sample=false`，只检查读取是否持续；开启后另检查 `last_sample_time_utc`，缺失实际时间显示 unknown，不虚构新鲜度或恢复。连续无效读数与没有新数据分别告警。
+
+## 可选的主机健康与本地缓解记录
+
+`host_health_sources` 默认空列表，不改变原有设备、MQTT 和数据库检查。独立接收器订阅主机专用健康主题，把有界快照和接收器心跳原子写入共享目录；监督程序只读整个目录，不连接该 MQTT 客户端，不执行缓解命令，不需要 Docker socket。即使 ingestor 不可用，这条主机告警输入仍独立判断。仅合成配置示例：
+
+```json
+{
+  "host_health_sources": [{
+    "id": "example-router",
+    "site_id": "example-site",
+    "host_id": "example-router",
+    "label": "示例路由器",
+    "path": "/observed/host-health/example-router.json",
+    "receiver_health_path": "/observed/host-health/health.json",
+    "freshness_seconds": 180,
+    "critical_freshness_seconds": 300,
+    "receiver_freshness_seconds": 90,
+    "receiver_failure_seconds": 180
+  }]
+}
+```
+
+来源文件采用 `schema_version=1` 的平铺主机报文，包含明确站点/主机身份、UUID 消息和启动标识、正整数序号、原始 `read_time_utc`、数值 `uptime_seconds`/`metrics`，以及接收器补充的 `receive_time_utc` 和原报文 `payload_sha256`。不使用文件 mtime 或补报接收时间更新资源新鲜度；资源时间、启动标识、序号和内容水位持久保存，旧资源或同序号变更不能解除新故障。`payload_sha256` 对应原始 wire 字节；接收器会独立合并动作列表，不能把它当作整个导出 JSON 的文件哈希。单个主机文件最多读取 64 KiB，接收器健康文件最多 8 KiB。
+
+本地守卫始终提供 `memory_pressure`、`io_pressure`、`temperature`、`storage` 四项 `conditions`；每项带 `state=good/bad/unknown`、`severity=warning/critical`、`incident_id` 和固定 `detail_code`。**本地已确认状态是资源告警依据**，监督程序不从数值再计算另一套阈值。缺项、畸形、未来时间超过允许的 60 秒误差或旧报文都不能证明恢复。故障键保持 `host:<id>:<kind>`，本地事件 ID 改变不绕过去重、严重升级、提醒周期或持续恢复窗口。
+
+主机原始读取时间超过 180 秒告警、超过 300 秒升级；文件缺失从最近有效采样计时，尚未有过采样时从监督进程启动计时。接收器健康文件的 `heartbeat_time_utc` 必须在 90 秒内，且 `connected/subscribed=true`、`last_error=null`；否则连续 180 秒报告接收链路故障。此时主机判断为 unknown，相关既有故障和待发通知暂停，不形成整批主机离线告警，也不据此恢复旧故障。接收链路和新鲜主机状态恢复后，仍须正常连续 180 秒才清警。
+
+`actions` 是接收器合并的动作阶段列表，最多 128 项：每项包含 UUID `event_id/action_id/incident_id`、原始 `action_time_utc`、固定 `kind=restart_proxy`、`target_id=proxy` 和 `result=claimed/succeeded/failed/uncertain`。每个阶段使用新事件 ID，同一次动作保留 action ID；`claimed` 只表示已记录执行意图，不能显示为执行成功。最长迟到 6 小时的有效动作仍可通知，明确展示原始时间，不用它刷新主机心跳。接收器可以持久保留 7 天审计，但监督程序不会把例如 3 天前的旧动作作为新通知，也不据此刷新资源恢复窗口。监督程序只转发这些审计结果，不会重放执行命令。
+
+动作使用独立的 `host-action:<id>:<event_id>` 待发键与“缓解记录”标签，不覆盖同一主机尚未送达的故障通知；通知 ID 从来源事件确定生成，来源事件 ID 也在消息中保留。SQLite 新增可重复建表的去重记录，保留 7 天、最多 4096 项。满额时保留旧记录、暂停接受新动作并告警，不通过驱逐未过期记录制造重复通知。动作通知沿用相同飞书预算、确认、退避、待发年龄与容量限制；去重记录保留不代表飞书一定成功，超时仍可能导致对端收到重复消息。移除来源配置会阻止其旧待发继续发送，故障、去重库和历史不会删除。
+
+共享目录应只读挂载到本容器；不要绑定单个原子替换的 JSON inode。真实设备身份、路径、账号及 Webhook 仍只放私有配置。验收使用合成状态/动作，不停用网关、MQTT、网络核心服务或真实代理来制造故障。此功能不修改生产 ingestor、数据库模式、原始归档或 Grafana。
 
 ## 暂停单台设备告警
 
@@ -129,6 +162,8 @@ docker compose -f compose.example.yaml --env-file .env stop business-supervisor
 ```
 
 保留 `data`、原采集服务、队列及主机健康预算；若主机摘要已添加监督健康文件，应同时撤销对应观察项，避免计划停止被判为故障。不要通过删状态库或重新建库来绕过通知预算。
+
+撤销主机健康接入时，优先保留支持 `host_health_sources` 的当前兼容镜像，将该列表改为空并重建监督容器。当前逻辑会阻止已移除来源的待发主机通知，保留事件、重试和预算。更早镜像可能不认识 `host:`、`receiver:`、`host-action:` 等通知键，直接切回后仍可能发送遗留通知；精确回退到旧镜像前必须核对这些待发记录，不能通过删除整个状态库处理。确认监督配置已移除来源后，再停止相应接收器和主机服务。
 
 ## 测试与边界
 

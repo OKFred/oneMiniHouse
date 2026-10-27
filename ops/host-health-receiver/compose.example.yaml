@@ -1,0 +1,28 @@
+services:
+  host-health-receiver:
+    build: .
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 64m
+    cpus: 0.10
+    pids_limit: 16
+    tmpfs:
+      - /tmp:size=4m,mode=1777
+    volumes:
+      - ${HOST_HEALTH_RECEIVER_CONFIG:?private config required}:/app/config.json:ro
+      - ${HOST_HEALTH_RECEIVER_DATA:?private state directory required}:/app/data:rw
+      - ${HOST_HEALTH_MQTT_PASSWORD:?existing receiver password file required}:/run/secrets/mqtt-password:ro
+    healthcheck:
+      test: [CMD, python, /app/receiver.py, --healthcheck, /app/data/monitor/health.json]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: 1m
+        max-file: "2"

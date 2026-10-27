@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import types
 import unittest
+import uuid
 from unittest.mock import patch
 
 from supervisor import (Observation, Supervisor, bounded_json, evaluate, load_config,
@@ -1093,6 +1094,311 @@ class SupervisorTests(unittest.TestCase):
             self.assertIn(device_check_key(other) + ":freshness", keys)
         self.assertIn("mqtt:example-global", keys)
         self.assertIn("target:local", keys)
+
+
+class HostHealthTests(unittest.TestCase):
+    good_health = SupervisorTests.good_health
+    write_health = SupervisorTests.write_health
+    faults = SupervisorTests.faults
+    outbox = SupervisorTests.outbox
+    all_outbox = SupervisorTests.all_outbox
+
+    def setUp(self):
+        SupervisorTests.setUp(self)
+        self.monitor.state.close()
+        self.cfg["host_health_sources"] = [{"id": "example-router", "site_id": "example-site", "host_id": "example-router",
+            "label": "示例路由器", "path": str(self.root / "router.json"), "receiver_health_path": str(self.root / "receiver.json")}]
+        self.reload_config()
+        self.monitor = Supervisor(self.cfg, self.now - 600)
+        self.host = self.cfg["host_health_sources"][0]
+        self.sample = {"schema_version": 1, "message_id": str(uuid.uuid4()), "site_id": "example-site", "host_id": "example-router",
+            "boot_id": str(uuid.uuid4()), "sequence": 1, "read_time_utc": utc(self.now), "receive_time_utc": utc(self.now),
+            "uptime_seconds": 600, "payload_sha256": "a" * 64, "metrics": {"mem_available_bytes": 500000000},
+            "conditions": {name: {"state": "good", "severity": "warning", "incident_id": None, "detail_code": "none"}
+                           for name in ("memory_pressure", "io_pressure", "temperature", "storage")}, "actions": []}
+        self.write_receiver(self.now)
+        self.write_sample()
+
+    def tearDown(self):
+        SupervisorTests.tearDown(self)
+
+    def reload_config(self):
+        (self.root / "config.json").write_text(json.dumps(self.cfg), encoding="utf-8")
+        self.cfg = load_config(str(self.root / "config.json"))
+
+    def write_receiver(self, now, connected=True, subscribed=True):
+        Path(self.host["receiver_health_path"]).write_text(json.dumps({"schema_version": 1, "heartbeat_time_utc": utc(now),
+            "connected": connected, "subscribed": subscribed, "last_error": None}), encoding="utf-8")
+
+    def write_sample(self):
+        Path(self.host["path"]).write_text(json.dumps(self.sample), encoding="utf-8")
+
+    def tick(self, now, fresh=False, sender=lambda *_: True):
+        self.write_health(now)
+        self.write_receiver(now)
+        if fresh:
+            self.sample.update(sequence=self.sample["sequence"] + 1, message_id=str(uuid.uuid4()),
+                               read_time_utc=utc(now), receive_time_utc=utc(now))
+            self.write_sample()
+        return self.monitor.tick(now, sender)
+
+    def memory_bad(self, severity="warning"):
+        self.sample["conditions"]["memory_pressure"] = {"state": "bad", "severity": severity,
+            "incident_id": str(uuid.uuid4()), "detail_code": "memory_available_critical" if severity == "critical" else "memory_available_low"}
+
+    def action(self, result="succeeded", moment=None, action_id=None):
+        return {"event_id": str(uuid.uuid4()), "action_id": action_id or str(uuid.uuid4()), "incident_id": str(uuid.uuid4()),
+            "action_time_utc": utc(self.now if moment is None else moment), "kind": "restart_proxy", "result": result, "target_id": "proxy"}
+
+    def test_optional_host_sources_and_strict_configuration(self):
+        original = copy.deepcopy(self.cfg)
+        self.assertEqual(self.host["freshness_seconds"], 180)
+        self.assertEqual(self.host["critical_freshness_seconds"], 300)
+        variants = [dict(self.host, id="bad:identity"), dict(self.host, site_id=[]), dict(self.host, path="relative.json"),
+                    dict(self.host, receiver_health_path=None), dict(self.host, freshness_seconds=True),
+                    dict(self.host, critical_freshness_seconds=180)]
+        for variant in variants:
+            with self.subTest(config=variant):
+                self.cfg = copy.deepcopy(original)
+                self.cfg["host_health_sources"] = [variant]
+                with self.assertRaisesRegex(ValueError, "HOST_HEALTH"):
+                    self.reload_config()
+        self.cfg = copy.deepcopy(original)
+        self.cfg["host_health_sources"].append(copy.deepcopy(self.host))
+        with self.assertRaisesRegex(ValueError, "HOST_HEALTH"):
+            self.reload_config()
+        self.cfg = copy.deepcopy(original)
+        del self.cfg["host_health_sources"]
+        self.reload_config()
+        self.assertEqual(self.cfg["host_health_sources"], [])
+
+    def test_fresh_host_is_healthy_without_metric_threshold_inference(self):
+        self.sample["metrics"]["mem_available_bytes"] = 1
+        self.write_sample()
+        status = self.tick(self.now)
+        self.assertEqual(status["quality"], "ok")
+        self.assertFalse(status["host_health_blocked_checks"])
+        self.assertFalse(self.faults())  # Local guard conditions are authoritative.
+
+    def test_reporting_uses_original_read_time_and_escalates_without_child_storm(self):
+        self.sample["receive_time_utc"] = utc(self.now + 181)
+        self.write_sample()
+        first = self.tick(self.now + 181)
+        fault = next(row for row in first["active_faults"] if row["key"] == "host:example-router:reporting")
+        self.assertEqual(fault["severity"], "warning")
+        second = self.tick(self.now + 301)
+        fault = next(row for row in second["active_faults"] if row["key"] == "host:example-router:reporting")
+        self.assertEqual(fault["severity"], "critical")
+        self.assertFalse(any(row["key"].startswith("host:example-router:") and row["key"] != fault["key"] for row in self.faults()))
+
+    def test_missing_host_file_ages_from_last_sample(self):
+        self.tick(self.now)
+        Path(self.host["path"]).unlink()
+        status = self.tick(self.now + 301)
+        self.assertIn("host:example-router:reporting", [row["key"] for row in status["active_faults"]])
+
+    def test_receiver_failure_suppresses_existing_child_notice_and_only_alerts_parent(self):
+        self.memory_bad()
+        self.tick(self.now, fresh=True)
+        key = "host:example-router:memory_pressure"
+        old = dict(self.monitor.state.db.execute("SELECT * FROM outbox WHERE fault_key=?", (key,)).fetchone())
+        self.cfg["notifications"]["enabled"] = True
+        for offset in (60, 240):
+            self.write_health(self.now + offset)
+            self.write_receiver(self.now + offset, connected=False)
+            self.monitor.tick(self.now + offset, lambda *args: self.fail("Disconnected receiver cannot prove the child fault")) if offset == 60 else self.monitor.tick(self.now + offset, lambda *_: True)
+        row = dict(self.monitor.state.db.execute("SELECT * FROM outbox WHERE fault_key=?", (key,)).fetchone())
+        self.assertEqual(row, old)
+        self.assertIn("receiver:example-router:mqtt", [row["key"] for row in self.faults()])
+        self.assertEqual(self.monitor.state.db.execute("SELECT good_since_time_utc FROM fault WHERE key=?", (key,)).fetchone()[0], None)
+
+    def test_local_fault_escalates_only_once_and_has_stable_key(self):
+        self.cfg["notifications"]["enabled"] = True
+        sent = []
+        self.memory_bad()
+        self.tick(self.now, fresh=True, sender=lambda *args: sent.append(args[1]) or True)
+        for offset, severity in ((60, "critical"), (120, "warning"), (180, "critical")):
+            self.memory_bad(severity)
+            self.tick(self.now + offset, fresh=True, sender=lambda *args: sent.append(args[1]) or True)
+        self.assertEqual(len(sent), 2)
+        self.assertEqual([row["key"] for row in self.faults()], ["host:example-router:memory_pressure"])
+
+    def test_receiver_interruption_resets_full_recovery_window(self):
+        self.cfg["notifications"]["enabled"] = True
+        self.memory_bad()
+        self.tick(self.now, fresh=True)
+        self.sample["conditions"]["memory_pressure"]["state"] = "good"
+        self.tick(self.now + 60, fresh=True)
+        self.write_health(self.now + 120)
+        self.write_receiver(self.now + 120, subscribed=False)
+        self.monitor.tick(self.now + 120)
+        for offset in (180, 240, 300):
+            self.tick(self.now + offset, fresh=True)
+            self.assertTrue(any(row["key"] == "host:example-router:memory_pressure" for row in self.faults()))
+        self.tick(self.now + 360, fresh=True)
+        self.assertFalse(any(row["key"] == "host:example-router:memory_pressure" for row in self.faults()))
+
+    def test_old_resource_replay_cannot_clear_newer_fault(self):
+        old = copy.deepcopy(self.sample)
+        self.memory_bad()
+        self.tick(self.now + 60, fresh=True)
+        self.sample = old
+        self.sample["receive_time_utc"] = utc(self.now + 120)
+        self.write_sample()
+        self.tick(self.now + 120)
+        key = "host:example-router:memory_pressure"
+        self.assertTrue(any(row["key"] == key for row in self.faults()))
+        self.assertIsNone(self.monitor.state.db.execute("SELECT good_since_time_utc FROM fault WHERE key=?", (key,)).fetchone()[0])
+        self.assertTrue(self.monitor.device_notification_blocked(key))
+
+    def test_malformed_missing_and_future_condition_data_never_recovers(self):
+        self.memory_bad()
+        self.tick(self.now, fresh=True)
+        baseline = copy.deepcopy(self.sample)
+        variants = []
+        for field, value in (("state", []), ("severity", {}), ("detail_code", []), ("incident_id", "bad-id")):
+            sample = copy.deepcopy(baseline)
+            sample["conditions"]["memory_pressure"][field] = value
+            variants.append(sample)
+        sample = copy.deepcopy(baseline); del sample["conditions"]; variants.append(sample)
+        sample = copy.deepcopy(baseline); sample["read_time_utc"] = utc(self.now + 1000); variants.append(sample)
+        sample = copy.deepcopy(baseline); sample["host_id"] = "another-example"; variants.append(sample)
+        for sample in variants:
+            with self.subTest(sample=sample):
+                self.sample = sample
+                self.write_sample()
+                self.tick(self.now + 60)
+                key = "host:example-router:memory_pressure"
+                self.assertTrue(any(row["key"] == key for row in self.faults()))
+                self.assertTrue(self.monitor.device_notification_blocked(key))
+
+    def test_restart_blocks_persisted_host_notice_until_new_observation(self):
+        self.memory_bad()
+        self.tick(self.now, fresh=True)
+        self.monitor.state.close()
+        self.monitor = Supervisor(self.cfg, self.now + 60)
+        self.cfg["notifications"]["enabled"] = True
+        self.assertEqual(self.monitor.deliver(self.now + 60, lambda *args: self.fail("New process has not observed the host")), "idle")
+        self.tick(self.now + 60, fresh=True, sender=lambda *_: True)
+        self.assertFalse(self.outbox())
+
+    def test_delayed_action_is_not_lost_and_does_not_clobber_existing_fault(self):
+        self.memory_bad()
+        self.tick(self.now, fresh=True)
+        key = "host:example-router:memory_pressure"
+        old_id = self.monitor.state.db.execute("SELECT id FROM outbox WHERE fault_key=?", (key,)).fetchone()[0]
+        self.sample["actions"] = [self.action(moment=self.now - 5 * 3600)]
+        self.write_sample()
+        self.tick(self.now + 240)
+        self.assertEqual(self.monitor.state.db.execute("SELECT id FROM outbox WHERE fault_key=?", (key,)).fetchone()[0], old_id)
+        actions = [row for row in self.all_outbox() if row["kind"] == "action"]
+        self.assertEqual(len(actions), 1)
+        self.assertIn(utc(self.now - 5 * 3600), actions[0]["detail"])
+        action_id = actions[0]["id"]
+        self.tick(self.now + 300)
+        self.assertEqual([row["id"] for row in self.all_outbox() if row["kind"] == "action"], [action_id])
+
+    def test_each_action_phase_is_notified_once_across_observer_restart(self):
+        action_id = str(uuid.uuid4())
+        self.sample["actions"] = [self.action(result, action_id=action_id) for result in ("claimed", "succeeded", "failed", "uncertain")]
+        self.cfg["notifications"]["enabled"] = True
+        sent = []
+        self.write_sample()
+        self.tick(self.now, sender=lambda *args: sent.append(args[1]) or True)
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0]["content"]["text"].count("[缓解记录]"), 4)
+        self.assertEqual(self.monitor.state.db.execute("SELECT count(*) FROM host_action_receipt").fetchone()[0], 4)
+        self.monitor.state.close()
+        self.monitor = Supervisor(self.cfg, self.now + 60)
+        self.tick(self.now + 60, fresh=True, sender=lambda *args: self.fail("Acknowledged phases must not be replayed"))
+
+    def test_action_uses_existing_http_budget_and_keeps_pending_phase(self):
+        self.cfg["notifications"].update(enabled=True, requests_per_hour=1)
+        action_id = str(uuid.uuid4())
+        self.sample["actions"] = [self.action("claimed", action_id=action_id)]
+        self.write_sample()
+        self.tick(self.now)
+        self.sample["actions"].append(self.action("succeeded", moment=self.now + 60, action_id=action_id))
+        status = self.tick(self.now + 60, fresh=True, sender=lambda *args: self.fail("Hourly budget must apply to action audit"))
+        self.assertEqual(status["notification_result"], "budget_exhausted")
+        self.assertEqual(len([row for row in self.outbox() if row["kind"] == "action"]), 1)
+
+    def test_action_receipts_have_bounded_capacity_and_expiry(self):
+        with self.monitor.state.db:
+            self.monitor.state.db.executemany("INSERT INTO host_action_receipt VALUES (?,?,?)", [(str(uuid.uuid4()), "example-router", self.now) for _ in range(4096)])
+        self.sample["actions"] = [self.action()]
+        self.write_sample()
+        self.tick(self.now)
+        self.assertEqual(self.monitor.state.db.execute("SELECT count(*) FROM host_action_receipt").fetchone()[0], 4096)
+        self.assertFalse(any(row["kind"] == "action" for row in self.outbox()))
+        with self.monitor.state.db:
+            self.monitor.state.db.execute("UPDATE host_action_receipt SET seen_time_utc=?", (self.now - 7 * 86400 - 1,))
+        self.tick(self.now + 60, fresh=True)
+        self.assertEqual(self.monitor.state.db.execute("SELECT count(*) FROM host_action_receipt").fetchone()[0], 1)
+        self.assertEqual(len([row for row in self.outbox() if row["kind"] == "action"]), 1)
+
+    def test_expired_invalid_or_future_actions_are_not_notified(self):
+        actions = [self.action(moment=self.now - 21601), self.action(moment=self.now + 61), self.action()]
+        actions[2]["target_id"] = "arbitrary-command"
+        self.sample["actions"] = actions
+        self.write_sample()
+        self.tick(self.now)
+        self.assertFalse(any(row["kind"] == "action" for row in self.outbox()))
+
+    def test_new_host_failure_does_not_pause_original_device_checks(self):
+        device = next(iter(self.health["business_health"]["devices"].values()))
+        device["last_collect_time_utc"] = utc(self.now - 301)
+        self.write_health(self.now)
+        self.write_receiver(self.now, connected=False)
+        status = self.monitor.tick(self.now)
+        self.assertIn(device_check_key(self.cfg["devices"][0]) + ":freshness", [row["key"] for row in status["active_faults"]])
+
+    def test_nonfinite_or_huge_metrics_are_unknown_without_crashing(self):
+        self.memory_bad()
+        self.tick(self.now, fresh=True)
+        original = copy.deepcopy(self.sample)
+        for value in (True, float("nan"), float("inf"), 10 ** 1000):
+            with self.subTest(metric=value):
+                self.sample = copy.deepcopy(original)
+                self.sample["metrics"]["mem_available_bytes"] = value
+                self.write_sample()
+                status = self.tick(self.now + 60)
+                self.assertIn("host:example-router:memory_pressure", status["host_health_blocked_checks"])
+
+    def test_removing_host_source_blocks_old_audit_and_fault_without_deleting_state(self):
+        self.memory_bad()
+        self.sample["actions"] = [self.action()]
+        self.write_sample()
+        self.tick(self.now, fresh=True)
+        before = self.all_outbox()
+        self.cfg["host_health_sources"] = []
+        self.cfg["notifications"]["enabled"] = True
+        self.tick(self.now + 60, sender=lambda *args: self.fail("Removed source cannot emit old notices"))
+        self.assertEqual(self.all_outbox(), before)
+        self.assertEqual(self.monitor.state.db.execute("SELECT count(*) FROM host_action_receipt").fetchone()[0], 1)
+
+    def test_host_alert_path_is_independent_of_missing_ingestor_snapshot(self):
+        self.memory_bad()
+        self.write_sample()
+        Path(self.cfg["ingestor_health_file"]).unlink()
+        status = self.monitor.tick(self.now)
+        self.assertIn("host:example-router:memory_pressure", [row["key"] for row in status["active_faults"]])
+        self.assertIn("ingestor:heartbeat", [row["key"] for row in status["active_faults"]])
+
+    def test_three_day_audit_is_not_a_new_notice_or_resource_recovery(self):
+        self.memory_bad()
+        self.tick(self.now, fresh=True)
+        self.sample["actions"] = [self.action(moment=self.now - 3 * 86400)]
+        self.write_sample()
+        self.tick(self.now + 240)
+        self.assertFalse(any(row["kind"] == "action" for row in self.all_outbox()))
+        self.assertEqual(self.monitor.state.db.execute("SELECT count(*) FROM host_action_receipt").fetchone()[0], 0)
+        row = self.monitor.state.db.execute("SELECT active,good_since_time_utc FROM fault WHERE key='host:example-router:memory_pressure'").fetchone()
+        self.assertEqual(row["active"], 1)
+        self.assertIsNone(row["good_since_time_utc"])
+        cursor = self.monitor.state.get("host_sample:example-router")
+        self.assertEqual(cursor["read_time"], self.now)
+
 
 
 if __name__ == "__main__":

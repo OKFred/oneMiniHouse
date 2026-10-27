@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import math
 import os
@@ -98,6 +99,25 @@ NOTIFICATION_DEFAULTS = {
 }
 FAILURE_KINDS = ("failure", "escalation", "reminder")
 REMINDER_CATEGORIES = {"validity", "freshness", "clock", "actual_sample", "mqtt", "target", "queue", "storage", "heartbeat", "event_loop", "collector", "other"}
+HOST_CONDITIONS = {
+    "memory_pressure": "内存压力", "io_pressure": "I/O 阻塞", "temperature": "设备温度", "storage": "存储空间",
+}
+HOST_DETAIL_CODES = {"none", "metric_unavailable", "memory_available_low", "memory_available_critical", "io_wait_blocked", "temperature_high", "storage_low"}
+HOST_ACTION_RESULTS = {"claimed": "已记录执行意图，尚未确认结果", "succeeded": "执行成功", "failed": "执行失败", "uncertain": "执行结果不确定"}
+
+
+def canonical_uuid(value) -> bool:
+    try:
+        return isinstance(value, str) and str(uuid.UUID(value)) == value.lower()
+    except (ValueError, AttributeError):
+        return False
+
+
+def finite_number(value) -> bool:
+    try:
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def severity_rank(value: str | None) -> int:
@@ -147,7 +167,8 @@ def load_config(path: str) -> dict:
     cfg.setdefault("mqtt_client_ids", [])
     cfg.setdefault("collector_health_files", [])
     cfg.setdefault("storage", [])
-    for key, maximum in (("devices", 256), ("targets", 16), ("mqtt_client_ids", 16), ("collector_health_files", 32), ("storage", 16)):
+    cfg.setdefault("host_health_sources", [])
+    for key, maximum in (("devices", 256), ("targets", 16), ("mqtt_client_ids", 16), ("collector_health_files", 32), ("storage", 16), ("host_health_sources", 32)):
         if not isinstance(cfg[key], list) or len(cfg[key]) > maximum:
             raise ValueError("INVALID_CONFIG_LIST_" + key)
     def identifier(value):
@@ -155,6 +176,24 @@ def load_config(path: str) -> dict:
     for key in ("targets", "mqtt_client_ids"):
         if not all(identifier(value) for value in cfg[key]) or len(set(cfg[key])) != len(cfg[key]):
             raise ValueError("INVALID_OR_DUPLICATE_" + key)
+    hosts, host_ids = set(), set()
+    for host in cfg["host_health_sources"]:
+        def safe_id(value):
+            return isinstance(value, str) and 0 < len(value) <= 128 and all(char.isascii() and (char.isalnum() or char in "_-") for char in value)
+        if (not isinstance(host, dict) or not all(safe_id(host.get(key)) for key in ("id", "site_id", "host_id"))
+                or host["id"] in host_ids or (host["site_id"], host["host_id"]) in hosts
+                or any(not isinstance(host.get(key), str) or not os.path.isabs(host[key]) or len(host[key]) > 1024
+                       or any(ord(char) < 32 for char in host[key]) for key in ("path", "receiver_health_path"))
+                or not identifier(host.get("label", host["id"]))):
+            raise ValueError("INVALID_HOST_HEALTH_SOURCE")
+        hosts.add((host["site_id"], host["host_id"]))
+        host_ids.add(host["id"])
+        for key, default in (("freshness_seconds", 180), ("critical_freshness_seconds", 300), ("receiver_freshness_seconds", 90), ("receiver_failure_seconds", 180)):
+            host.setdefault(key, default)
+            if type(host[key]) is not int or not 10 <= host[key] <= 3600:
+                raise ValueError("INVALID_HOST_HEALTH_THRESHOLD")
+        if host["critical_freshness_seconds"] <= host["freshness_seconds"]:
+            raise ValueError("INVALID_HOST_HEALTH_THRESHOLD")
     for path_key in ("state_directory", "ingestor_health_file"):
         if not isinstance(cfg.get(path_key), str) or not cfg[path_key]:
             raise ValueError("INVALID_PATH_" + path_key)
@@ -230,6 +269,8 @@ class State:
             attempts INTEGER NOT NULL DEFAULT 0);
           CREATE INDEX IF NOT EXISTS outbox_due ON outbox(next_attempt_time_utc);
           CREATE TABLE IF NOT EXISTS request_budget(attempt_time_utc REAL NOT NULL);
+          CREATE TABLE IF NOT EXISTS host_action_receipt(event_id TEXT PRIMARY KEY,host_id TEXT NOT NULL,seen_time_utc REAL NOT NULL);
+          CREATE INDEX IF NOT EXISTS host_action_receipt_seen ON host_action_receipt(seen_time_utc);
         """)
         # Additive and repeatable migration: keep incidents, queued notifications
         # and request budgets. Legacy delivered severity is the best persisted
@@ -484,6 +525,106 @@ def resource_observations(cfg: dict, now: float, state: State, health: dict | No
     return result
 
 
+def host_snapshot(record: dict, host: dict, now: float) -> tuple[float, str]:
+    """Validate the bounded receiver export; never use its file modification time."""
+    read = timestamp(record.get("read_time_utc"))
+    received = timestamp(record.get("receive_time_utc"))
+    if (type(record.get("schema_version")) is not int or record["schema_version"] != 1
+            or record.get("site_id") != host["site_id"] or record.get("host_id") != host["host_id"]
+            or not canonical_uuid(record.get("message_id")) or not canonical_uuid(record.get("boot_id"))
+            or type(record.get("sequence")) is not int or not 1 <= record["sequence"] <= 2 ** 53 - 1
+            or not finite_number(record.get("uptime_seconds")) or record["uptime_seconds"] < 0
+            or not isinstance(record.get("read_time_utc"), str) or not record["read_time_utc"].endswith("Z")
+            or not isinstance(record.get("receive_time_utc"), str) or not record["receive_time_utc"].endswith("Z")
+            or read is None or received is None or read > now + 60 or received > now + 60 or read > received + 60):
+        raise ValueError("INVALID_HOST_SNAPSHOT")
+    digest = record.get("payload_sha256")
+    metrics = record.get("metrics")
+    if (not isinstance(digest, str) or len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest)
+            or not isinstance(metrics, dict) or len(metrics) > 128
+            or any(not isinstance(key, str) or not key or len(key) > 64
+                   or any(not char.isascii() or not (char.isalnum() or char == "_") for char in key)
+                   or not finite_number(value)
+                   for key, value in metrics.items())):
+        raise ValueError("INVALID_HOST_SNAPSHOT")
+    # Actions are merged independently by the receiver. They may change without
+    # advancing the resource sample, so exclude them from the resource watermark.
+    core = {key: record.get(key) for key in ("message_id", "boot_id", "sequence", "read_time_utc", "uptime_seconds", "metrics", "conditions")}
+    return read, hashlib.sha256(json.dumps(core, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+
+
+def host_health_observations(cfg: dict, now: float, startup: float, state: State):
+    observations, blocked, action_sources = [], set(), []
+    for host in cfg.get("host_health_sources", []):
+        prefix = "host:" + host["id"] + ":"
+        label = host.get("label", host["id"])
+        condition_keys = {prefix + kind for kind in HOST_CONDITIONS}
+        all_keys = condition_keys | {prefix + "reporting"}
+        try:
+            receiver = bounded_json(host["receiver_health_path"], 8192)
+            receiver_age = age(receiver.get("heartbeat_time_utc"), now)
+            receiver_good = (type(receiver.get("schema_version")) is int and receiver["schema_version"] == 1
+                             and receiver_age is not None and receiver_age <= host["receiver_freshness_seconds"]
+                             and receiver.get("connected") is True and receiver.get("subscribed") is True
+                             and receiver.get("last_error") is None)
+        except (OSError, ValueError):
+            receiver_good = False
+        observations.append(Observation("receiver:" + host["id"] + ":mqtt", "good" if receiver_good else "bad",
+                                        label + "健康接收端 MQTT 或心跳不可用", "critical", host["receiver_failure_seconds"]))
+        record = None
+        try:
+            record = bounded_json(host["path"], 65536)
+            read, fingerprint = host_snapshot(record, host, now)
+            cursor = state.get("host_sample:" + host["id"])
+            if (cursor is not None and (read < cursor["read_time"]
+                    or read == cursor["read_time"] and (record["boot_id"] != cursor["boot_id"]
+                        or record["sequence"] < cursor["sequence"]
+                        or record["sequence"] == cursor["sequence"] and fingerprint != cursor["fingerprint"]))):
+                raise ValueError("HOST_RESOURCE_REPLAY")
+            if cursor is None or read > cursor["read_time"] or record["sequence"] > cursor["sequence"]:
+                state.set("host_sample:" + host["id"], {"read_time": read, "boot_id": record["boot_id"], "sequence": record["sequence"], "fingerprint": fingerprint})
+            action_sources.append((host, record))
+        except (OSError, ValueError, TypeError, KeyError):
+            read = None
+        if not receiver_good:
+            blocked.update(all_keys)
+            observations.extend(Observation(key, "unknown", label + "接收链路不可用，暂停主机判断") for key in sorted(all_keys))
+            continue
+        cursor = state.get("host_sample:" + host["id"])
+        last_read = read if read is not None else cursor.get("read_time") if cursor else startup
+        sample_age = max(0, now - last_read)
+        if read is None:
+            # Invalid/future/replayed input cannot clear either a resource fault
+            # or a reporting fault. Missing reports still age from the last good read.
+            if record is not None:
+                blocked.update(all_keys)
+                observations.extend(Observation(key, "unknown", label + "主机快照无效或旧资源重放，暂停判断") for key in sorted(all_keys))
+                continue
+        reporting_bad = sample_age > host["freshness_seconds"]
+        severity = "critical" if sample_age > host["critical_freshness_seconds"] else "warning"
+        observations.append(Observation(prefix + "reporting", "bad" if reporting_bad else "good" if read is not None else "unknown",
+                                        label + "没有新健康采样", severity))
+        if read is None or reporting_bad:
+            blocked.update(condition_keys)
+            observations.extend(Observation(key, "unknown", label + "健康采样缺失或过期，暂停资源判断") for key in sorted(condition_keys))
+            continue
+        conditions = record.get("conditions")
+        complete = isinstance(conditions, dict) and set(conditions) == set(HOST_CONDITIONS)
+        for kind, title in HOST_CONDITIONS.items():
+            value = conditions.get(kind) if complete else None
+            key = prefix + kind
+            valid = (isinstance(value, dict) and isinstance(value.get("state"), str) and value["state"] in ("good", "bad", "unknown")
+                     and isinstance(value.get("severity"), str) and value["severity"] in ("warning", "critical")
+                     and isinstance(value.get("detail_code"), str) and value["detail_code"] in HOST_DETAIL_CODES
+                     and (value.get("incident_id") is None or canonical_uuid(value["incident_id"])))
+            if not valid or value["state"] == "unknown":
+                blocked.add(key)
+                observations.append(Observation(key, "unknown", label + title + "状态缺失或无效，暂停判断"))
+            else:
+                observations.append(Observation(key, value["state"], label + title + "异常", value["severity"]))
+    return observations, blocked, action_sources
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None  # Never disclose the webhook token to a redirected host.
@@ -533,6 +674,7 @@ class Supervisor:
         self.state = State(directory / "supervisor.sqlite")
         self.startup = time.time() if now is None else now
         self.notification_error = None
+        self.host_notification_blocks = {"host:" + host["id"] + ":" + kind for host in cfg.get("host_health_sources", []) for kind in (*HOST_CONDITIONS, "reporting")}
         with self.state.db:
             self.sync_device_pauses(self.startup)
             # A new process must obtain a new bad observation before completing
@@ -549,10 +691,52 @@ class Supervisor:
                 self.state.db.execute("UPDATE outbox SET suspended_time_utc=COALESCE(suspended_time_utc,?) WHERE id=?", (now, row["id"]))
 
     def device_notification_blocked(self, key: str) -> bool:
+        host_ids = {host["id"] for host in self.cfg.get("host_health_sources", [])}
+        if key.startswith(("host:", "host-action:", "receiver:")) and key.split(":", 2)[1] not in host_ids:
+            return True  # Removing a source does not replay its old queued notices.
+        if key == "host-actions:capacity" and not host_ids:
+            return True
+        if key in self.host_notification_blocks:
+            return True
         if device_alerts_paused(self.cfg, key):
             return True
         fault = self.state.db.execute("SELECT alerts_paused_time_utc FROM fault WHERE key=?", (key,)).fetchone()
         return fault is not None and fault[0] is not None
+
+    def record_host_actions(self, sources: list, now: float) -> list[Observation]:
+        """Queue each original action phase once, separately from persistent faults."""
+        self.state.db.execute("DELETE FROM host_action_receipt WHERE seen_time_utc<?", (now - 7 * 86400,))
+        capacity = self.state.db.execute("SELECT count(*) FROM host_action_receipt").fetchone()[0] >= 4096
+        for host, record in sources:
+            actions = record.get("actions", [])
+            if not isinstance(actions, list) or len(actions) > 128:
+                continue
+            for action in actions:
+                if not isinstance(action, dict):
+                    continue
+                action_time = timestamp(action.get("action_time_utc"))
+                if (not all(canonical_uuid(action.get(key)) for key in ("event_id", "action_id", "incident_id"))
+                        or not isinstance(action.get("result"), str) or action["result"] not in HOST_ACTION_RESULTS
+                        or action.get("kind") != "restart_proxy" or action.get("target_id") != "proxy"
+                        or not isinstance(action.get("action_time_utc"), str) or not action["action_time_utc"].endswith("Z")
+                        or action_time is None or action_time > now + 60 or action_time < now - 21600):
+                    continue
+                event_id = action["event_id"].lower()
+                if self.state.db.execute("SELECT 1 FROM host_action_receipt WHERE event_id=?", (event_id,)).fetchone():
+                    continue
+                if self.state.db.execute("SELECT count(*) FROM host_action_receipt").fetchone()[0] >= 4096:
+                    capacity = True
+                    continue  # Keep existing receipts: evicting them could re-send old phases.
+                key = "host-action:" + host["id"] + ":" + event_id
+                notification_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "one-minihouse:" + key))
+                detail = (host.get("label", host["id"]) + "代理重启：" + HOST_ACTION_RESULTS[action["result"]]
+                          + "；原始时间 " + utc(action_time) + "；动作 " + action["action_id"] + "；来源事件 " + event_id)
+                self.state.db.execute("INSERT INTO outbox(id,fault_key,kind,severity,detail,create_time_utc,next_attempt_time_utc,attempts,suspended_time_utc) VALUES (?,?, 'action','warning',?,?,?,0,NULL)",
+                                      (notification_id, key, detail[:1000], now, now))
+                self.state.db.execute("INSERT INTO host_action_receipt VALUES (?,?,?)", (event_id, host["id"], now))
+        if not self.cfg.get("host_health_sources"):
+            return []
+        return [Observation("host-actions:capacity", "bad" if capacity else "good", "主机缓解事件去重记录达到容量，暂停接收新事件", "warning")]
 
     def enqueue(self, key: str, kind: str, severity: str, detail: str, now: float):
         fault = self.state.db.execute("SELECT * FROM fault WHERE key=?", (key,)).fetchone()
@@ -695,7 +879,7 @@ class Supervisor:
         lines = ["家庭采集链路 · " + self.cfg.get("supervisor_id", "supervisor"), utc(now)]
         selected = []
         for row in rows:
-            label = "测试" if row["kind"].startswith("test") else "恢复" if row["kind"] == "recovery" else "严重升级" if row["kind"] == "escalation" else "持续提醒" if row["kind"] == "reminder" else "首次告警"
+            label = "测试" if row["kind"].startswith("test") else "缓解记录" if row["kind"] == "action" else "恢复" if row["kind"] == "recovery" else "严重升级" if row["kind"] == "escalation" else "持续提醒" if row["kind"] == "reminder" else "首次告警"
             if row["kind"] in FAILURE_KINDS:
                 label += "·严重" if row["severity"] == "critical" else "·注意"
             line = f"[{label}] {row['detail']}\n事件 {row['id']}"
@@ -756,12 +940,15 @@ class Supervisor:
         except (OSError, ValueError):
             health = None
         clock_rollback = now < previous - 60
+        action_sources = []
         if clock_rollback:
             observations = [Observation("supervisor:clock", "bad", "监督程序时钟倒退，暂停故障恢复判断", "critical")]
         else:
             observations = evaluate(self.cfg, health, now, self.startup, self.state)
             observations.append(Observation("supervisor:clock", "good", "监督程序时钟恢复"))
             observations.extend(resource_observations(self.cfg, now, self.state, health))
+            host_observations, self.host_notification_blocks, action_sources = host_health_observations(self.cfg, now, self.startup, self.state)
+            observations.extend(host_observations)
             for collector in self.cfg["collector_health_files"]:
                 try:
                     record = bounded_json(collector["path"])
@@ -771,6 +958,8 @@ class Supervisor:
                 except (OSError, ValueError):
                     observations.append(Observation("collector:" + collector["id"], "bad", collector.get("label", collector["id"]) + "采集器健康文件不可读", "warning", 60))
         with self.state.db:
+            if not clock_rollback:
+                observations.extend(self.record_host_actions(action_sources, now))
             self.reconcile(observations, now)
             self.state.set("last_clock_time_utc", max(now, previous))
         if clock_rollback:
@@ -790,6 +979,7 @@ class Supervisor:
         status = {"heartbeat_time_utc": utc(now), "quality": "degraded" if faults or self.notification_error or unknown or notification_blocked else "ok", "active_faults": faults, "unknown_checks": unknown,
                   "notification_pending": pending, "notification_suspended": suspended, "paused_device_alerts": [{"site_id": entry.get("site_id"), "gateway_id": entry["gateway_id"], "device_id": entry["device_id"]} for entry in self.cfg["devices"] if entry.get("alerts_enabled", True) is False],
                   "test_notification_pending": test_pending, "notification_result": result, "notification_error": self.notification_error,
+                  "host_health_blocked_checks": sorted(self.host_notification_blocks),
                   "last_notification_success_time_utc": self.state.get("last_notification_success_time_utc"), "observed_health_fresh": fresh}
         atomic_json(self.directory / "status.json", status)
         atomic_json(self.directory / "health.json", {"heartbeat_time_utc": utc(now), "check_interval_seconds": self.cfg["check_interval_seconds"], "quality": status["quality"], "notification_error": self.notification_error,
