@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { hash, canonical, parseJson, parseSample, stableUuid, PROCESSOR_ID, PROCESSOR_VERSION, type RecordRow, type RawRecord, type FrameRecord, type Sample } from './message.ts';
 import {convertHistory,LEGACY_TABLES,type LegacyTable,type LegacyRow} from './history.ts';
 import { collectdTemperatureProcessor } from './collectd.ts';
+import { hostHealthProcessor } from './host-health.ts';
 import { isXiaomiTemperature, xiaomiQualityProcessor, XIAOMI_QUALITY_PROCESSOR_ID } from './xiaomi-quality.ts';
 export type Target = 'local' | 'supabase';
 export type DeliveryTarget = Target | 'd1' | 'sls';
@@ -23,6 +24,7 @@ export class Queue {
   readonly options: Required<QueueOptions>;
   constructor(path: string, options: QueueOptions, processors:Processor[] = []) {
     this.registerProcessor(collectdTemperatureProcessor);
+    this.registerProcessor(hostHealthProcessor);
     this.registerProcessor(xiaomiQualityProcessor);
     this.registerProcessor({id:PROCESSOR_ID,version:PROCESSOR_VERSION,process:raw=>{
       const prefix=raw.topic.split('/').slice(0,4).join('/');

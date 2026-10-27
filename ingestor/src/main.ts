@@ -2,7 +2,7 @@ import { mkdirSync,writeFileSync,renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { loadConfig,secret } from './config.ts';
-import { MqttConnections, receiveConnectionMessage } from './mqtt-connections.ts';
+import { MqttConnections, receiveConnectionMessage, observeConnectionMessage } from './mqtt-connections.ts';
 import { Queue,CapacityError,type DeliveryTarget } from './queue.ts';
 import { PostgresSink,errorCode,permanentDeliveryError } from './database.ts';
 import { createCloudRawSink,createFrameSink } from './cloud.ts';
@@ -29,10 +29,10 @@ const mqttConnections=new MqttConnections(config,secret(config.mqtt.passwordFile
   try{
     const bytes=Buffer.from(packet.payload);
     const result=receiveConnectionMessage(queue,config,plan,packet);
-    businessHealth.observeAccepted(result,packet.topic,bytes,config.collectdTemperatures);
+    observeConnectionMessage(businessHealth,result,packet,config,plan);
     // Both commits finish before this connection releases PUBACK. Raw samples
     // and idempotent alert state are shared by every MQTT connection.
-    if(cpuAlerts&&result!=='rejected'&&packet.topic.endsWith('/telemetry'))cpuAlerts.observe(parseJson(bytes.toString('utf8')) as Sample);
+    if(cpuAlerts&&!plan.hostHealthInput&&result!=='rejected'&&packet.topic.endsWith('/telemetry'))cpuAlerts.observe(parseJson(bytes.toString('utf8')) as Sample);
     log('message_'+result,{client_id:plan.clientId,topic:packet.topic});
   }catch(e){
     log('intake_paused',{client_id:plan.clientId,reason:e instanceof CapacityError?'QUEUE_FULL':'STORAGE_ERROR',...queue.stats()});

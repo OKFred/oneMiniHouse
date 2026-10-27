@@ -1,7 +1,9 @@
 import mqtt, { type IClientOptions, type IPublishPacket, type MqttClient } from 'mqtt';
-import { mqttConnectionPlans, type Config, type MqttConnectionPlan } from './config.ts';
+import { mqttConnectionPlans, secret, type Config, type MqttConnectionPlan } from './config.ts';
 import { receive } from './intake.ts';
 import type { Queue } from './queue.ts';
+import { hostHealthProcessor, hostHealthRaw } from './host-health.ts';
+import type { BusinessHealth } from './business-health.ts';
 
 /** Enforce the connection's exact topic assignment even if an old persistent
  * session delivers messages from filters no longer configured for this client.
@@ -13,8 +15,24 @@ export function receiveConnectionMessage(queue: Queue, config: Config, plan: Mqt
     const expected = filter.split('/');
     return expected.length === levels.length && expected.every((level, index) => level === '+' || level === levels[index]);
   });
+  if (!allowed && plan.hostHealthInput) {
+    queue.reject(packet.topic, Buffer.from('[invalid host health redacted]'), 'UNEXPECTED_MQTT_TOPIC'); return 'rejected' as const;
+  }
   if (!allowed) { queue.reject(packet.topic, bytes, 'UNEXPECTED_MQTT_TOPIC'); return 'rejected' as const; }
-  return receive(queue, packet.topic, bytes, config.mqtt.topicPrefixes, plan.primary ? config.collectdTemperatures : []);
+  if (plan.hostHealthInput && (packet.qos !== 1 || packet.retain)) {
+    queue.reject(packet.topic, Buffer.from('[invalid host health redacted]'), 'INVALID_HOST_HEALTH_TRANSPORT');
+    return 'rejected' as const;
+  }
+  return receive(queue, packet.topic, bytes, config.mqtt.topicPrefixes, plan.primary ? config.collectdTemperatures : [], plan.hostHealthInput ? [plan.hostHealthInput] : []);
+}
+
+/** Flat host-health wire is normalized before monitoring; it is never parsed as
+ * a standard telemetry envelope or counted as an individual CPU core sample. */
+export function observeConnectionMessage(health: Pick<BusinessHealth, 'observe' | 'observeAccepted'>, result: 'saved' | 'duplicate' | 'rejected', packet: IPublishPacket, config: Config, plan: MqttConnectionPlan): void {
+  const bytes = Buffer.from(packet.payload);
+  if (plan.hostHealthInput) {
+    if (result === 'saved') health.observe(hostHealthProcessor.process(hostHealthRaw(plan.hostHealthInput, bytes)));
+  } else health.observeAccepted(result, packet.topic, bytes, config.collectdTemperatures);
 }
 
 type Log = (event: string, fields?: object) => void;
@@ -31,6 +49,7 @@ interface Connection {
 interface Dependencies {
   connect?: (url: string, options: IClientOptions) => MqttClient;
   schedule?: Schedule;
+  readSecret?: (path: string) => string;
 }
 const schedule: Schedule = (callback, milliseconds) => {
   const timer = setTimeout(callback, milliseconds);
@@ -57,12 +76,16 @@ export class MqttConnections {
   ) {
     const connect = dependencies.connect ?? mqtt.connect;
     const later = dependencies.schedule ?? schedule;
-    for (const plan of mqttConnectionPlans(config)) {
+    const credentials = mqttConnectionPlans(config).map(plan => ({ plan,
+      username: plan.hostHealthInput?.username ?? config.mqtt.username,
+      password: plan.hostHealthInput ? (dependencies.readSecret ?? secret)(plan.hostHealthInput.passwordFile) : password,
+    }));
+    for (const { plan, username, password: connectionPassword } of credentials) {
       const client = connect(config.mqtt.url, {
         protocolVersion: 5, clean: false, clientId: plan.clientId,
-        username: config.mqtt.username, password, rejectUnauthorized: true,
+        username, password: connectionPassword, rejectUnauthorized: true,
         reconnectPeriod: 5000, reconnectOnConnackError: true, connectTimeout: 15000, keepalive: 30, resubscribe: false,
-        properties: { sessionExpiryInterval: config.mqtt.sessionExpirySeconds, receiveMaximum: 10, maximumPacketSize: 1048576 },
+        properties: { sessionExpiryInterval: config.mqtt.sessionExpirySeconds, receiveMaximum: 10, maximumPacketSize: plan.hostHealthInput ? 16384 : 1048576 },
       });
       const connection: Connection = {
         client, generation: 0, attempt: 0, retryDelay: 30000,
@@ -117,7 +140,7 @@ export class MqttConnections {
           if (!current()) return;
           if (!plan.subscriptions.length) { succeeded(); return; }
           try {
-            client.subscribe(plan.subscriptions, { qos: 1, rh: 2 }, (error, granted) => {
+            client.subscribe(plan.subscriptions, { qos: 1, rh: 2, ...(plan.hostHealthInput ? { rap: true } : {}) }, (error, granted) => {
               if (!current()) return;
               const exact = granted?.length === plan.subscriptions.length && plan.subscriptions.every(topic => granted.some(grant => grant.topic === topic && grant.qos === 1));
               if (error || !exact) { failed(error ? code(error) : 'SUBACK_REJECTED'); return; }

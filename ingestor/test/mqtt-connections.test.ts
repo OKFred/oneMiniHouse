@@ -1,13 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { MqttClient, IClientOptions, IPublishPacket } from 'mqtt';
 import { mqttConnectionPlans, mqttSubscriptions, validateConfig, type Config } from '../src/config.ts';
-import { MqttConnections, receiveConnectionMessage } from '../src/mqtt-connections.ts';
-import { Queue } from '../src/queue.ts';
+import { MqttConnections, receiveConnectionMessage, observeConnectionMessage } from '../src/mqtt-connections.ts';
+import { Queue, ConflictError } from '../src/queue.ts';
 import { receive } from '../src/intake.ts';
+import { BusinessHealth } from '../src/business-health.ts';
 
 const example = () => JSON.parse(readFileSync(new URL('../config/ingestor.example.json', import.meta.url), 'utf8'));
 const prefix = (host: string) => `iot/v1/example-home/${host}`;
@@ -81,8 +84,8 @@ class FakeClient extends EventEmitter {
   stream = { destroy: () => { this.destroyed++; this.connected = false; this.emit('close'); } };
   handleMessage!: MqttClient['handleMessage'];
   open() { this.connected = true; this.emit('connect', { sessionPresent: true }); }
-  subscribe(topics: string[], options: { qos: number; rh: number }, done: (error: Error | null, grants?: { topic: string; qos: 1 | 128 }[]) => void) {
-    assert.deepEqual(options, { qos: 1, rh: 2 }); this.subscribeCalls.push([...topics]);
+  subscribe(topics: string[], options: { qos: number; rh: number; rap?: boolean }, done: (error: Error | null, grants?: { topic: string; qos: 1 | 128 }[]) => void) {
+    assert.deepEqual(options, topics.every(topic => topic.endsWith('/host-health')) ? { qos: 1, rh: 2, rap: true } : { qos: 1, rh: 2 }); this.subscribeCalls.push([...topics]);
     const callback = () => done(null, topics.map(topic => ({ topic, qos: this.rejectSubscribe ? 128 : 1 })));
     this.subscribeCallbacks.push(callback); if (!this.holdSubscribe) callback();
   }
@@ -92,14 +95,15 @@ class FakeClient extends EventEmitter {
   async endAsync(force: boolean) { assert.equal(force, true); this.ended++; this.connected = false; }
 }
 function fixture(intake: ConstructorParameters<typeof MqttConnections>[2] = () => {}, config: Config = validateConfig(extended())) {
-  const clients: FakeClient[] = [], urls: string[] = [], options: IClientOptions[] = [], events: { event: string; fields?: object }[] = [];
+  const clients: FakeClient[] = [], urls: string[] = [], options: IClientOptions[] = [], events: { event: string; fields?: object }[] = [], readSecretCalls: string[] = [];
   const timers: { callback: () => void; milliseconds: number; cancelled: boolean }[] = [];
   const connections = new MqttConnections(config, 'synthetic-password', intake, (event, fields) => events.push({ event, fields }), {
     connect: (url, option) => { urls.push(url); options.push(option); const client = new FakeClient(); clients.push(client); return client as unknown as MqttClient; },
+    readSecret: path => { readSecretCalls.push(path); return 'synthetic-host-password'; },
     schedule: (callback, milliseconds) => { const timer = { callback, milliseconds, cancelled: false }; timers.push(timer); return () => { timer.cancelled = true; }; },
   });
   const runTimer = () => { const timer = timers.find(t => !t.cancelled); assert.ok(timer); timer.cancelled = true; timer.callback(); return timer.milliseconds; };
-  return { clients, connections, urls, options, events, timers, runTimer };
+  return { clients, connections, urls, options, events, timers, runTimer, readSecretCalls };
 }
 
 test('verified TLS MQTT and WebSocket transports preserve both durable identities and subscriptions', async () => {
@@ -253,4 +257,115 @@ test('intake enforces each connection topic and payload identity, including stal
     assert.equal(queue.nextBatch('local').length, 2);
     assert.equal(queue.nextBatch('supabase').length, 2);
   } finally { queue.close(); }
+});
+
+function hostConfig() {
+  const config = extended();
+  config.hostHealthInputs = [{ topic: prefix('example-router') + '/host-health', siteId: 'example-home', hostId: 'example-router',
+    deviceId: 'temperature-example-router', clientId: 'example-host-health-ingestor', username: 'example-host-health-reader',
+    passwordFile: '/run/secrets/example-host-health-password' }];
+  return config;
+}
+function hostPacket(): IPublishPacket {
+  return { cmd: 'publish', qos: 1, dup: false, retain: false, topic: prefix('example-router') + '/host-health',
+    payload: Buffer.from(JSON.stringify({ schema_version: 1, message_id: randomUUID(), site_id: 'example-home', host_id: 'example-router',
+      boot_id: randomUUID(), sequence: 1, read_time_utc: new Date().toISOString(), uptime_seconds: 1000, metrics: { cpu_temperature_c: 42.25 },
+      conditions: Object.fromEntries(['memory_pressure', 'io_pressure', 'temperature', 'storage'].map(key => [key,
+        { state: 'good', severity: 'warning', incident_id: null, detail_code: 'none' }])), actions: [] })),
+  };
+}
+test('host-health adds one independent least-privilege session without changing any existing MQTT plan', async () => {
+  const baseline = mqttConnectionPlans(validateConfig(extended()));
+  const config = validateConfig(hostConfig()), plans = mqttConnectionPlans(config), input = config.hostHealthInputs![0];
+  assert.deepEqual(plans.slice(0, 2), baseline);
+  assert.equal(plans[2].clientId, input.clientId); assert.deepEqual(plans[2].subscriptions, [input.topic]);
+  assert.deepEqual(plans[2].unsubscriptions, []); assert.deepEqual(plans[2].topicPrefixes, []);
+  const f = fixture(() => {}, config);
+  try {
+    assert.deepEqual(f.readSecretCalls, [input.passwordFile]);
+    assert.deepEqual(f.options.map(value => value.username), [config.mqtt.username, config.mqtt.username, input.username]);
+    assert.deepEqual(f.options.map(value => value.password), ['synthetic-password', 'synthetic-password', 'synthetic-host-password']);
+    assert.deepEqual(f.options.map(value => value.properties?.maximumPacketSize), [1048576, 1048576, 16384]);
+    f.clients.forEach(client => client.open());
+    assert.equal(f.connections.snapshot().subscribed, true);
+    assert.deepEqual(f.connections.snapshot().mqtt_connections.map(value => value.subscription_count), [10, 3, 1]);
+  } finally { await f.connections.stop(); }
+});
+test('host-health configuration rejects ambiguous identities, topics, credential paths and durable client collisions', () => {
+  for (const change of [
+    (c: any) => { c.hostHealthInputs = null; },
+    (c: any) => { c.hostHealthInputs[0].topic = 'iot/v1/example-home/+/host-health'; },
+    (c: any) => { c.hostHealthInputs[0].siteId = 'other-site'; },
+    (c: any) => { c.hostHealthInputs[0].hostId = 'other-router'; },
+    (c: any) => { c.hostHealthInputs[0].deviceId = '../invalid'; },
+    (c: any) => { c.hostHealthInputs[0].clientId = c.mqtt.clientId; },
+    (c: any) => { c.hostHealthInputs[0].clientId = c.mqtt.telemetryClients[0].clientId; },
+    (c: any) => { c.hostHealthInputs[0].username = 'inline:credential'; },
+    (c: any) => { c.hostHealthInputs[0].passwordFile = '../secrets/password'; },
+    (c: any) => { c.hostHealthInputs[0].passwordFile = '/run/secrets/invalid\npassword'; },
+    (c: any) => { c.hostHealthInputs.push({ ...c.hostHealthInputs[0], clientId: 'different-client', deviceId: 'different-device' }); },
+  ]) { const raw = hostConfig(); change(raw); assert.throws(() => validateConfig(raw)); }
+});
+test('all host credentials load before any MQTT session is opened', () => {
+  let connected = 0;
+  assert.throws(() => new MqttConnections(validateConfig(hostConfig()), 'synthetic-password', () => {}, () => {}, {
+    connect: () => { connected++; throw new Error('Connect should not run'); },
+    readSecret: () => { throw new Error('Missing synthetic credential'); },
+  }), /Missing synthetic credential/);
+  assert.equal(connected, 0);
+});
+test('host-health durable intake normalizes CPU temperature for both targets and business health without weakening wire isolation', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'host-health-intake-'));
+  const queue = new Queue(':memory:', { maxPending: 20, maxRejected: 20 });
+  const health = new BusinessHealth(join(directory, 'monitor.json'), { dataDir: directory, lagMs: () => 0 });
+  const config = validateConfig(hostConfig()), plans = mqttConnectionPlans(config), plan = plans[2];
+  try {
+    const packet = hostPacket(), result = receiveConnectionMessage(queue, config, plan, packet);
+    assert.equal(result, 'saved'); observeConnectionMessage(health, result, packet, config, plan);
+    const first = queue.nextBatch('local');
+    assert.equal(first.length, 1); assert.deepEqual(JSON.parse(first[0].payload).metrics, { cpu_temperature_c: 42.25 });
+    assert.equal(JSON.parse(first[0].payload).observation_kind, 'direct_read');
+    assert.equal(JSON.parse(first[0].payload).source.driver, 'openwrt-host-health');
+    assert.deepEqual(queue.nextBatch('supabase').map(value => value.id), first.map(value => value.id));
+    assert.equal(receiveConnectionMessage(queue, config, plan, packet), 'duplicate');
+    observeConnectionMessage(health, 'duplicate', packet, config, plan);
+    const snapshot = health.snapshot();
+    assert.equal(snapshot.monitor_error, null);
+    assert.equal(snapshot.devices['example-home/example-router/temperature-example-router'].consecutive_invalid_samples, 0);
+    assert.equal(snapshot.devices['example-home/example-router/temperature-example-router'].observation_kind, 'direct_read');
+    assert.equal(queue.stats().processing_failed, 0);
+    assert.equal(receiveConnectionMessage(queue, config, plans[0], packet), 'rejected');
+    assert.equal(receiveConnectionMessage(queue, config, plan, { ...packet, retain: true }), 'rejected');
+    assert.equal(receiveConnectionMessage(queue, config, plan, { ...packet, qos: 0 }), 'rejected');
+    assert.equal(receiveConnectionMessage(queue, config, plan, { ...packet, topic: prefix('other-router') + '/host-health' }), 'rejected');
+    const swapped = { ...packet, payload: Buffer.from(JSON.stringify({ ...JSON.parse(packet.payload.toString()), host_id: 'other-router' })) };
+    assert.equal(receiveConnectionMessage(queue, config, plan, swapped), 'rejected');
+    assert.equal(queue.nextBatch('local').length, 1); assert.equal(Reflect.get(queue.stats(), 'rejected'), 5);
+  } finally { await health.close(); queue.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+test('a host-health subscription failure leaves all original sessions active', async () => {
+  const f = fixture(() => {}, validateConfig(hostConfig()));
+  try {
+    f.clients[2].rejectSubscribe = true; f.clients.forEach(client => client.open());
+    const health = f.connections.snapshot();
+    assert.deepEqual(health.mqtt_connections.slice(0, 2).map(value => value.subscribed), [true, true]);
+    assert.equal(health.mqtt_connections[2].error, 'SUBACK_REJECTED');
+    assert.equal(f.clients[0].destroyed + f.clients[1].destroyed, 0);
+    assert.equal(f.runTimer(), 30000);
+  } finally { await f.connections.stop(); }
+});
+test('host-health rejection, transport and conflicting identity paths retain only a fixed redacted diagnostic', () => {
+  const config = validateConfig(hostConfig()), plan = mqttConnectionPlans(config)[2], packet = hostPacket();
+  const rejections: { topic: string; body: string; reason: string }[] = [];
+  const queue = { options: { rawRetentionDays: 7 },
+    reject: (topic: string, body: Buffer, reason: string) => { rejections.push({ topic, body: body.toString(), reason }); },
+    acceptRaw: () => { throw new ConflictError('Synthetic duplicate conflict'); },
+  } as unknown as Queue;
+  const privateBytes = Buffer.from('SYNTHETIC-INVALID-PRIVATE-MARKER');
+  assert.equal(receiveConnectionMessage(queue, config, plan, { ...packet, payload: privateBytes }), 'rejected');
+  assert.equal(receiveConnectionMessage(queue, config, plan, { ...packet, retain: true, payload: privateBytes }), 'rejected');
+  assert.equal(receiveConnectionMessage(queue, config, plan, { ...packet, topic: prefix('other-router') + '/host-health', payload: privateBytes }), 'rejected');
+  assert.equal(receiveConnectionMessage(queue, config, plan, packet), 'rejected');
+  assert.deepEqual(rejections.map(value => value.reason), ['INVALID_HOST_HEALTH', 'INVALID_HOST_HEALTH_TRANSPORT', 'UNEXPECTED_MQTT_TOPIC', 'HOST_HEALTH_OBSERVATION_CONFLICT']);
+  assert.ok(rejections.every(value => value.body === '[invalid host health redacted]'));
 });

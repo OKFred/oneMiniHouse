@@ -1,17 +1,24 @@
 import { readFileSync } from 'node:fs';
+import { isAbsolute } from 'node:path';
 import { validateCollectdInput, type CollectdTemperatureInput } from './collectd.ts';
 import { validateCpuCoreAlertConfig, type CpuCoreAlertConfig } from './cpu-core-alert.ts';
+import { validateHostHealthInput, type HostHealthInput } from './host-health.ts';
 
 export interface TargetConfig {
   id: 'local' | 'supabase'; host: string; port: number; database: string; user: string;
   passwordFile: string; tls: boolean; caFile?: string; retentionDays?: number;
 }
 export interface TelemetryClientConfig { clientId: string; topicPrefixes: string[] }
+export interface HostHealthMqttInput extends HostHealthInput {
+  siteId: string; hostId: string; clientId: string; username: string; passwordFile: string;
+}
 export interface MqttConnectionPlan {
   clientId: string; primary: boolean; topicPrefixes: string[]; subscriptions: string[]; unsubscriptions: string[];
+  hostHealthInput?: HostHealthMqttInput;
 }
 export interface Config {
   collectdTemperatures?: CollectdTemperatureInput[];
+  hostHealthInputs?: HostHealthMqttInput[];
   cpuCoreAlerts?: CpuCoreAlertConfig & { webhookFile: string };
   mqtt: { url: string; clientId: string; username: string; passwordFile: string; topicPrefixes: string[]; frameTopicPrefixes?: string[]; telemetryClients?: TelemetryClientConfig[]; sessionExpirySeconds: number };
   queue: { maxPending: number; maxRejected: number; rawRetentionDays?: number; frameRetentionDays?: number; maxProtocolFrames?: number };
@@ -61,6 +68,24 @@ export function validateConfig(raw: unknown): Config {
     if (!Array.isArray(raw.collectdTemperatures) || raw.collectdTemperatures.length > 128) throw new Error('Invalid collectd inputs');
     for (const input of raw.collectdTemperatures) validateCollectdInput(input);
     if (new Set(raw.collectdTemperatures.map(v => v.topic)).size !== raw.collectdTemperatures.length) throw new Error('Duplicate collectd topic');
+  }
+  if (raw.hostHealthInputs !== undefined) {
+    if (!Array.isArray(raw.hostHealthInputs) || raw.hostHealthInputs.length > 32) throw new Error('Invalid host-health inputs');
+    const clients = new Set([m.clientId, ...((m.telemetryClients ?? []) as TelemetryClientConfig[]).map(value => value.clientId)]);
+    const topics = new Set((raw.collectdTemperatures as CollectdTemperatureInput[] | undefined ?? []).map(value => value.topic));
+    const identities = new Set<string>();
+    for (const input of raw.hostHealthInputs) {
+      validateHostHealthInput(input);
+      const value = input as HostHealthMqttInput;
+      if (!text(value.siteId) || !text(value.hostId) || value.topic !== `iot/v1/${value.siteId}/${value.hostId}/host-health`
+        || !text(value.clientId) || !/^[A-Za-z0-9_-]{1,128}$/.test(value.clientId) || clients.has(value.clientId)
+        || !text(value.username) || !/^[A-Za-z0-9_-]{1,128}$/.test(value.username)
+        || !text(value.passwordFile) || !isAbsolute(value.passwordFile) || /[\x00-\x1f]/.test(value.passwordFile)
+        || topics.has(value.topic)) throw new Error('Invalid or duplicate host-health connection');
+      const identity = `${value.siteId}/${value.hostId}/${value.deviceId}`;
+      if (identities.has(identity)) throw new Error('Duplicate host-health identity');
+      clients.add(value.clientId); topics.add(value.topic); identities.add(identity);
+    }
   }
   if (mqttConnectionPlans(raw as unknown as Config).some(client => client.subscriptions.length > 10)) throw new Error('Each MQTT connection supports at most 10 subscriptions; assign telemetryClients or explicit frameTopicPrefixes');
   for (const [key, max] of [['rawRetentionDays', 3650], ['frameRetentionDays', 365], ['maxProtocolFrames', 10000000]] as const) {
@@ -117,6 +142,9 @@ export function mqttConnectionPlans(config: Config): MqttConnectionPlan[] {
     // A reused secondary session can retain filters from its previous assignment.
     // Remove known foreign filters without clearing its durable message backlog.
     unsubscriptions: mqttSubscriptions(config).filter(topic => !client.topicPrefixes.some(prefix => topic === `${prefix}/devices/+/telemetry`)),
+  })), ...(config.hostHealthInputs ?? []).map(input => ({
+    clientId: input.clientId, primary: false, topicPrefixes: [],
+    subscriptions: [input.topic], unsubscriptions: [], hostHealthInput: input,
   }))];
 }
 export function secret(path: string): string {
