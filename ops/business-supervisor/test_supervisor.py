@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import sqlite3
 import subprocess
@@ -10,7 +11,8 @@ import uuid
 from unittest.mock import patch
 
 from supervisor import (Observation, Supervisor, bounded_json, evaluate, load_config,
-                        post_feishu, post_feishu_http, resource_observations, timestamp, utc, webhook_url, State, device_check_key)
+                        post_feishu, post_feishu_http, resource_observations, timestamp, utc, webhook_url, State, device_check_key,
+                        host_snapshot, host_memory_detail, host_process_name_valid, host_process_path_valid)
 
 
 class SupervisorTests(unittest.TestCase):
@@ -19,6 +21,8 @@ class SupervisorTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.now = 1800000000.0
         config = json.loads((Path(__file__).parent / "config.example.json").read_text(encoding="utf-8"))
+        config["repeat_seconds"] = 3600
+        config["reminder_backoff"] = {"enabled": False, "max_seconds": 86400}
         config["state_directory"] = str(self.root / "state")
         config["ingestor_health_file"] = str(self.root / "observed.json")
         config["storage"] = []
@@ -896,10 +900,12 @@ class SupervisorTests(unittest.TestCase):
                 self.assertEqual(event["attempts"], 2)
                 self.assertEqual(state.db.execute("SELECT count(*) FROM request_budget").fetchone()[0], 1)
                 self.assertIsNone(event["suspended_time_utc"])
-                self.assertEqual(state.get("state_schema_version"), 4)
+                self.assertEqual(state.get("state_schema_version"), 5)
                 names = [column["name"] for column in state.db.execute("PRAGMA table_info(fault)")]
                 self.assertEqual(names.count("good_since_time_utc"), 1)
                 self.assertEqual(names.count("notification_retry_after_time_utc"), 1)
+                self.assertEqual(names.count("reminder_backoff_step"), 1)
+                self.assertIsNone(row["reminder_backoff_step"])
             finally:
                 state.close()
 
@@ -1096,6 +1102,244 @@ class SupervisorTests(unittest.TestCase):
         self.assertIn("target:local", keys)
 
 
+    def enable_reminder_backoff(self, base=7200, maximum=86400):
+        self.cfg["repeat_seconds"] = base
+        self.cfg["reminder_backoff"] = {"enabled": True, "max_seconds": maximum}
+        self.cfg["notifications"]["enabled"] = True
+
+    def ack_backoff_failure(self, moment=None):
+        moment = self.now if moment is None else moment
+        self.reconcile_one("bad", moment)
+        self.assertEqual(self.monitor.deliver(moment, lambda *_: True), "sent")
+        self.assertEqual(self.fault()["reminder_backoff_step"], 0)
+        return moment
+
+    def test_progressive_reminders_double_to_daily_cap_after_success_only(self):
+        self.enable_reminder_backoff()
+        last = self.ack_backoff_failure()
+        for index, interval in enumerate((7200, 14400, 28800, 57600, 86400, 86400)):
+            self.reconcile_one("bad", last + interval - 1)
+            self.assertFalse(self.outbox())
+            self.reconcile_one("bad", last + interval)
+            self.assertEqual(self.outbox()[0]["kind"], "reminder")
+            self.assertEqual(self.monitor.deliver(last + interval, lambda *_: True), "sent")
+            last += interval
+            self.assertEqual(self.fault()["reminder_backoff_step"], min(index + 1, 4))
+            self.assertEqual(self.fault()["last_sent_time_utc"], last)
+
+    def test_progressive_reminder_failed_http_and_delayed_ack_keep_step_and_anchor(self):
+        self.enable_reminder_backoff()
+        first = self.ack_backoff_failure()
+        self.reconcile_one("bad", first + 7200)
+        original = self.outbox()[0]
+        self.assertEqual(self.monitor.deliver(first + 7200, lambda *_: False), "failed")
+        self.assertEqual(self.fault()["reminder_backoff_step"], 0)
+        self.assertEqual(self.fault()["last_sent_time_utc"], first)
+        self.assertEqual(self.outbox()[0]["id"], original["id"])
+        self.assertEqual(self.monitor.deliver(first + 7259, lambda *_: self.fail("retry too soon")), "idle")
+        self.assertEqual(self.monitor.deliver(first + 7500, lambda *_: True), "sent")
+        self.assertEqual(self.fault()["reminder_backoff_step"], 1)
+        self.assertEqual(self.fault()["last_sent_time_utc"], first + 7500)
+        self.reconcile_one("bad", first + 7500 + 14400 - 1)
+        self.assertFalse(self.outbox())
+
+    def test_progressive_reminder_step_and_deadline_survive_restart(self):
+        self.enable_reminder_backoff()
+        last = self.ack_backoff_failure()
+        for interval in (7200, 14400, 28800, 57600, 86400):
+            self.reconcile_one("bad", last + interval)
+            self.monitor.deliver(last + interval, lambda *_: True)
+            last += interval
+            expected = self.fault()["reminder_backoff_step"]
+            self.monitor.state.close()
+            self.monitor = Supervisor(self.cfg, last + 60)
+            self.assertEqual(self.fault()["reminder_backoff_step"], expected)
+            self.assertEqual(self.monitor.deliver(last + 60, lambda *_: self.fail("restart must not send")), "idle")
+            self.reconcile_one("bad", last + self.monitor.reminder_interval("noise:test") - 1)
+            self.assertFalse(self.outbox())
+
+    def test_escalation_bypasses_reminder_wait_without_resetting_backoff(self):
+        self.enable_reminder_backoff()
+        self.ack_backoff_failure()
+        self.reconcile_one("bad", self.now + 7200)
+        self.monitor.deliver(self.now + 7200, lambda *_: True)
+        self.reconcile_one("bad", self.now + 7260, "critical")
+        self.assertEqual(self.outbox()[0]["kind"], "escalation")
+        self.assertEqual(self.monitor.deliver(self.now + 7260, lambda *_: True), "sent")
+        self.assertEqual(self.fault()["reminder_backoff_step"], 1)
+        for offset, severity in ((7320, "warning"), (7380, "critical")):
+            self.reconcile_one("bad", self.now + offset, severity)
+            self.assertFalse(self.outbox())
+            self.assertEqual(self.fault()["reminder_backoff_step"], 1)
+        self.reconcile_one("bad", self.now + 7260 + 14400, "critical")
+        self.assertEqual(self.outbox()[0]["kind"], "reminder")
+
+    def test_flaps_unknown_and_good_do_not_reset_progressive_stage(self):
+        self.enable_reminder_backoff()
+        self.ack_backoff_failure()
+        self.reconcile_one("bad", self.now + 7200)
+        self.monitor.deliver(self.now + 7200, lambda *_: True)
+        for offset, state in ((7260, "good"), (7320, "unknown"), (7380, "bad")):
+            self.reconcile_one(state, self.now + offset)
+            self.assertEqual(self.fault()["reminder_backoff_step"], 1)
+            self.assertFalse(self.outbox())
+
+    def test_confirmed_recovery_then_new_incident_resets_progressive_stage(self):
+        self.enable_reminder_backoff()
+        self.ack_backoff_failure()
+        self.reconcile_one("bad", self.now + 7200)
+        self.monitor.deliver(self.now + 7200, lambda *_: True)
+        for offset in (7260, 7320, 7380, 7440):
+            self.reconcile_one("good", self.now + offset)
+        self.assertEqual(self.fault()["reminder_backoff_step"], 0)
+        self.assertEqual(self.outbox()[0]["kind"], "recovery")
+        self.assertEqual(self.monitor.deliver(self.now + 7440, lambda *_: True), "sent")
+        self.reconcile_one("bad", self.now + 7500, "critical")
+        self.assertEqual(self.outbox()[0]["kind"], "failure")
+        self.assertEqual(self.monitor.deliver(self.now + 7500, lambda *_: True), "sent")
+        self.assertEqual(self.fault()["reminder_backoff_step"], 0)
+        self.assertEqual(self.monitor.reminder_interval("noise:test"), 7200)
+
+    def test_old_pending_hourly_reminder_is_held_with_original_retry_evidence(self):
+        # A legacy hourly reminder must not bypass the policy during the first tick.
+        self.cfg["notifications"]["enabled"] = True
+        self.reconcile_one("bad", self.now - 7 * 86400)
+        self.monitor.state.db.execute("UPDATE fault SET active=1,notified=1,notified_highest_severity='warning',last_sent_time_utc=?,reminder_backoff_step=NULL WHERE key='noise:test'", (self.now - 3600,))
+        self.monitor.enqueue("noise:test", "reminder", "warning", "旧持续提醒", self.now - 60)
+        self.monitor.state.db.execute("UPDATE outbox SET attempts=2,next_attempt_time_utc=?", (self.now,))
+        self.monitor.state.db.commit()
+        original = self.outbox()[0]
+        self.enable_reminder_backoff()
+        self.monitor.state.close()
+        self.monitor = Supervisor(self.cfg, self.now)
+        self.assertEqual(self.fault()["reminder_backoff_step"], 4)
+        self.assertEqual(self.monitor.reminder_interval("noise:test"), 86400)
+        self.assertEqual(self.monitor.deliver(self.now, lambda *_: self.fail("old hourly notice escaped")), "idle")
+        held = self.outbox()[0]
+        for key in ("id", "attempts", "next_attempt_time_utc"):
+            self.assertEqual(held[key], original[key])
+        self.monitor.state.close()
+        self.monitor = Supervisor(self.cfg, self.now + 7200)
+        self.assertEqual(self.fault()["reminder_backoff_step"], 4)
+        self.assertEqual(self.monitor.deliver(self.now + 7200, lambda *_: self.fail("restart bypassed spacing")), "idle")
+        self.assertEqual(self.monitor.deliver(self.now - 3600 + 86400, lambda *_: True), "sent")
+
+    def test_legacy_unacknowledged_failure_is_not_silenced_by_old_age(self):
+        self.cfg["notifications"]["enabled"] = True
+        self.reconcile_one("bad", self.now - 7 * 86400)
+        self.monitor.state.db.execute("UPDATE outbox SET create_time_utc=?,next_attempt_time_utc=?", (self.now, self.now))
+        self.monitor.state.db.commit()
+        self.enable_reminder_backoff()
+        self.monitor.state.close()
+        self.monitor = Supervisor(self.cfg, self.now)
+        self.assertEqual(self.fault()["reminder_backoff_step"], 0)
+        self.assertEqual(self.outbox()[0]["kind"], "failure")
+        self.assertEqual(self.monitor.deliver(self.now, lambda *_: True), "sent")
+        self.assertEqual(self.fault()["reminder_backoff_step"], 0)
+
+    def test_legacy_seed_uses_cumulative_spacing_once_and_not_elapsed_each_restart(self):
+        self.cfg["notifications"]["enabled"] = True
+        self.reconcile_one("bad", self.now - 6 * 3600)
+        self.monitor.state.db.execute("UPDATE fault SET active=1,notified=1,notified_highest_severity='warning',last_sent_time_utc=?,reminder_backoff_step=NULL WHERE key='noise:test'", (self.now,))
+        self.monitor.state.db.execute("DELETE FROM outbox")
+        self.monitor.state.db.commit()
+        self.enable_reminder_backoff()
+        self.monitor.state.close()
+        self.monitor = Supervisor(self.cfg, self.now)
+        self.assertEqual(self.fault()["reminder_backoff_step"], 2)  # 2h + 4h elapsed.
+        self.assertEqual(self.monitor.reminder_interval("noise:test"), 8 * 3600)
+        self.monitor.state.close()
+        self.monitor = Supervisor(self.cfg, self.now + 7 * 86400)
+        self.assertEqual(self.fault()["reminder_backoff_step"], 2)
+
+    def test_progressive_category_override_is_lower_bound_and_cap_never_shortens_it(self):
+        self.enable_reminder_backoff()
+        key = "device:example-site/example-gateway/temperature-example:validity"
+        self.cfg["reminder_seconds_by_category"] = {"validity": 21600}
+        for step, interval in enumerate((21600, 43200, 86400, 86400)):
+            self.assertEqual(self.monitor.reminder_interval(key, {"reminder_backoff_step": step}), interval)
+        self.cfg["reminder_seconds_by_category"] = {"validity": 172800}
+        for step in (0, 1, 4, 999999999):
+            self.assertEqual(self.monitor.reminder_interval(key, {"reminder_backoff_step": step}), 172800)
+        self.cfg["reminder_seconds_by_category"] = {"validity": 3600}
+        self.assertEqual(self.monitor.reminder_interval(key), 7200)
+
+    def test_exhausted_reminder_retry_cooldown_uses_progressive_interval_without_advancing(self):
+        self.enable_reminder_backoff()
+        self.ack_backoff_failure()
+        self.monitor.state.db.execute("UPDATE fault SET reminder_backoff_step=2 WHERE key='noise:test'")
+        self.monitor.enqueue("noise:test", "reminder", "warning", "待发持续提醒", self.now + 8 * 3600)
+        self.monitor.state.db.execute("UPDATE outbox SET attempts=?", (self.cfg["notifications"]["max_attempts"],))
+        self.monitor.state.db.commit()
+        self.monitor.prune_notifications(self.now + 8 * 3600)
+        self.assertEqual(self.fault()["reminder_backoff_step"], 2)
+        self.assertEqual(self.fault()["notification_retry_after_time_utc"], self.now + 16 * 3600)
+        self.reconcile_one("bad", self.now + 16 * 3600 - 1)
+        self.assertFalse(self.outbox())
+        self.reconcile_one("bad", self.now + 16 * 3600)
+        self.assertEqual(self.outbox()[0]["kind"], "reminder")
+
+    def test_pruned_reminder_keeps_step_and_event_identity_without_early_delivery(self):
+        self.enable_reminder_backoff()
+        self.ack_backoff_failure()
+        self.monitor.state.db.execute("UPDATE fault SET reminder_backoff_step=4 WHERE key='noise:test'")
+        self.monitor.enqueue("noise:test", "reminder", "warning", "旧提前排队提醒", self.now)
+        self.monitor.state.db.commit()
+        original = self.outbox()[0]
+        self.reconcile_one("bad", self.now + 21601)
+        self.assertFalse(self.outbox())
+        self.assertEqual(self.fault()["reminder_backoff_step"], 4)
+        self.assertEqual(self.fault()["notification_event_id"], original["id"])
+        self.reconcile_one("bad", self.now + 86400)
+        self.assertEqual(self.outbox()[0]["id"], original["id"])
+        self.assertEqual(self.monitor.deliver(self.now + 86400, lambda *_: True), "sent")
+
+    def test_progressive_reminders_handle_zero_timestamp_and_large_persisted_stage(self):
+        self.enable_reminder_backoff()
+        self.ack_backoff_failure(0)
+        self.reconcile_one("bad", 7199)
+        self.assertFalse(self.outbox())
+        self.reconcile_one("bad", 7200)
+        self.assertEqual(self.monitor.deliver(7200, lambda *_: True), "sent")
+        self.monitor.state.db.execute("UPDATE fault SET reminder_backoff_step=? WHERE key='noise:test'", (9223372036854775807,))
+        self.monitor.state.db.commit()
+        self.assertEqual(self.monitor.reminder_interval("noise:test"), 86400)
+        self.reconcile_one("bad", 7200 + 86400)
+        self.assertEqual(self.monitor.deliver(7200 + 86400, lambda *_: True), "sent")
+        self.assertEqual(self.fault()["reminder_backoff_step"], 4)
+
+    def test_active_fault_status_exports_progressive_stage_interval_and_next_due(self):
+        self.enable_reminder_backoff()
+        self.ack_backoff_failure()
+        status = self.monitor.tick(self.now)
+        fault = next(row for row in status["active_faults"] if row["key"] == "noise:test")
+        self.assertEqual(fault["reminder_backoff_step"], 0)
+        self.assertEqual(fault["reminder_interval_seconds"], 7200)
+        self.assertEqual(fault["next_reminder_time_utc"], utc(self.now + 7200))
+
+    def test_missing_backoff_config_keeps_legacy_fixed_reminders(self):
+        path = self.root / "config.json"
+        value = json.loads(path.read_text(encoding="utf8"))
+        value.pop("reminder_backoff")
+        path.write_text(json.dumps(value), encoding="utf8")
+        loaded = load_config(str(path))
+        self.assertFalse(loaded["reminder_backoff"]["enabled"])
+        self.assertEqual(loaded["repeat_seconds"], 3600)
+        self.assertEqual(self.monitor.reminder_interval("noise:test"), 3600)
+
+    def test_progressive_reminder_config_validation_and_example_defaults(self):
+        example = load_config(str(Path(__file__).parent / "config.example.json"))
+        self.assertEqual(example["repeat_seconds"], 7200)
+        self.assertEqual(example["reminder_backoff"], {"enabled": True, "max_seconds": 86400})
+        path = self.root / "config.json"
+        original = json.loads(path.read_text(encoding="utf8"))
+        for invalid in (None, [], True, {"enabled": 1}, {"enabled": "true"}, {"max_seconds": True},
+                        {"max_seconds": 3599}, {"max_seconds": 604801}, {"unknown": 86400}):
+            path.write_text(json.dumps({**original, "reminder_backoff": invalid}), encoding="utf8")
+            with self.assertRaises(ValueError):
+                load_config(str(path))
+
+
 class HostHealthTests(unittest.TestCase):
     good_health = SupervisorTests.good_health
     write_health = SupervisorTests.write_health
@@ -1145,6 +1389,197 @@ class HostHealthTests(unittest.TestCase):
     def memory_bad(self, severity="warning"):
         self.sample["conditions"]["memory_pressure"] = {"state": "bad", "severity": severity,
             "incident_id": str(uuid.uuid4()), "detail_code": "memory_available_critical" if severity == "critical" else "memory_available_low"}
+
+    def memory_sample(self, available=200, total=1735, name="ex***", rss=640):
+        mib = 1024 * 1024
+        self.sample["metrics"] = {"memory_available_bytes": available * mib, "memory_total_bytes": total * mib}
+        self.sample["diagnostics"] = {"memory_top_process": {"name_masked": name, "rss_bytes": rss * mib}}
+        self.memory_bad()
+
+    def test_memory_alert_contains_sample_usage_masked_rss_and_trigger(self):
+        self.memory_sample()
+        self.cfg["notifications"]["enabled"] = True
+        sent = []
+        status = self.tick(self.now, fresh=True, sender=lambda *args: sent.append(args[1]) or True)
+        text = sent[0]["content"]["text"]
+        for expected in ("示例路由器内存压力异常", "200.0 MiB / 1735.0 MiB", "总量−可用", "88.5%",
+                         "RSS 第 1：ex***，640.0 MiB", "触发条件：可用内存 < 256 MiB 持续 120 秒", "样本时间：" + utc(self.now)):
+            self.assertIn(expected, text)
+        self.assertNotIn("pid", text)
+        self.assertNotIn("原因", text)
+        self.assertEqual(status["notification_result"], "sent")
+
+    def test_memory_critical_threshold_describes_trigger_and_not_current_hysteresis(self):
+        self.memory_sample(available=300)
+        self.memory_bad("critical")
+        self.tick(self.now, fresh=True)
+        detail = next(row["detail"] for row in self.faults() if row["key"].endswith(":memory_pressure"))
+        self.assertIn("300.0 MiB", detail)
+        self.assertIn("触发条件：可用内存 < 128 MiB 持续 60 秒", detail)
+        self.assertNotIn("256 MiB", detail)
+
+    def test_memory_legacy_metrics_and_no_process_are_explicitly_unavailable(self):
+        self.memory_bad()
+        self.tick(self.now, fresh=True)
+        detail = next(row["detail"] for row in self.faults() if row["key"].endswith(":memory_pressure"))
+        self.assertIn("可用/总内存：不可用 / 不可用", detail)
+        self.assertIn("内存占用率（总量−可用）：不可用", detail)
+        self.assertIn("RSS 第 1：不可用", detail)
+        self.assertNotIn("0.0 MiB", detail)
+
+    def test_memory_invalid_quantities_never_produce_fake_usage(self):
+        self.memory_sample()
+        baseline = copy.deepcopy(self.sample)
+        for field, value in (("memory_total_bytes", 0), ("memory_total_bytes", -1),
+                             ("memory_available_bytes", -1), ("memory_total_bytes", 1.5),
+                             ("memory_available_bytes", 2 ** 53), ("memory_available_bytes", 2000 * 1024 ** 2)):
+            with self.subTest(field=field, value=value):
+                sample = copy.deepcopy(baseline)
+                sample["metrics"][field] = value
+                detail = host_memory_detail("示例路由器", sample, sample["conditions"]["memory_pressure"])
+                self.assertIn("内存占用率", detail)
+                self.assertIn("不可用", detail)
+                self.assertNotIn("%", detail)
+                self.assertNotIn("-1.0 MiB", detail)
+
+    def test_memory_zero_available_is_real_value_and_missing_total_is_unknown(self):
+        self.memory_sample(available=0)
+        detail = host_memory_detail("示例路由器", self.sample, self.sample["conditions"]["memory_pressure"])
+        self.assertIn("0.0 MiB / 1735.0 MiB", detail)
+        self.assertIn("100.0%", detail)
+        del self.sample["metrics"]["memory_total_bytes"]
+        detail = host_memory_detail("示例路由器", self.sample, self.sample["conditions"]["memory_pressure"])
+        self.assertIn("0.0 MiB / 不可用", detail)
+        self.assertIn("内存占用率（总量−可用）：不可用", detail)
+
+    def test_memory_unmasked_or_injected_diagnostics_cannot_alert_or_recover(self):
+        self.memory_sample()
+        self.tick(self.now, fresh=True)
+        baseline = copy.deepcopy(self.sample)
+        variants = [None, [], {}, {"memory_top_process": None},
+                    {"memory_top_process": {"name_masked": "example-private-process", "rss_bytes": 1}},
+                    {"memory_top_process": {"name_masked": "ex***\nsecret", "rss_bytes": 1}},
+                    {"memory_top_process": {"name_masked": "ex***", "rss_bytes": 1, "pid": 12}},
+                    {"memory_top_process": {"name_masked": "ex***", "rss_bytes": 1}, "cmdline": "private"}]
+        for invalid_rss in (True, -1, 0.5, 2 ** 53, float("nan"), float("inf"), "123"):
+            variants.append({"memory_top_process": {"name_masked": "ex***", "rss_bytes": invalid_rss}})
+        for diagnostics in variants:
+            with self.subTest(diagnostics=diagnostics):
+                self.sample = copy.deepcopy(baseline)
+                self.sample["diagnostics"] = diagnostics
+                self.sample["conditions"]["memory_pressure"]["state"] = "good"
+                self.sample.update(sequence=100, read_time_utc=utc(self.now + 60), receive_time_utc=utc(self.now + 60))
+                self.write_sample()
+                status = self.tick(self.now + 60)
+                self.assertIn("host:example-router:memory_pressure", status["host_health_blocked_checks"])
+                self.assertTrue(any(row["key"] == "host:example-router:memory_pressure" for row in self.faults()))
+                self.assertNotIn("private", json.dumps(status, ensure_ascii=False))
+
+    def test_memory_diagnostics_accepts_only_short_masked_name_and_integer_rss(self):
+        self.memory_sample()
+        for name in ("***", "e***", "ex***", "_-***", "12***"):
+            with self.subTest(name=name):
+                self.sample["diagnostics"]["memory_top_process"] = {"name_masked": name, "rss_bytes": 0}
+                host_snapshot(self.sample, self.host, self.now)
+        for name in ("", "example***", "例***", "ex**", "ex****", "ex***\n", "ex*** "):
+            with self.subTest(name=name):
+                self.sample["diagnostics"]["memory_top_process"]["name_masked"] = name
+                with self.assertRaisesRegex(ValueError, "INVALID_HOST_DIAGNOSTICS"):
+                    host_snapshot(self.sample, self.host, self.now)
+
+    def test_memory_middle_mask_keeps_both_ends_and_at_most_three_stars(self):
+        for name in ("a", "ab", "n*e", "no*de", "n**e", "no***de", "test-***.exe", "a" * 30 + "***" + "z" * 31):
+            with self.subTest(name=name):
+                self.assertTrue(host_process_name_valid(name, legacy=False))
+        for name in ("", "abc", "node", "*node", "node*", "n****e", "n**o*e", "n** e", "n**e\n", "n**\\e",
+                     "n**/e", "n**例", "a" * 31 + "***" + "z" * 31, None, True):
+            with self.subTest(name=name):
+                self.assertFalse(host_process_name_valid(name, legacy=False))
+        for legacy in ("***", "e***", "ex***"):
+            self.assertTrue(host_process_name_valid(legacy))
+            self.assertFalse(host_process_name_valid(legacy, legacy=False))
+
+    def test_memory_executable_path_prefers_path_and_can_differ_from_comm(self):
+        self.memory_sample(name="wo**er")
+        process = self.sample["diagnostics"]["memory_top_process"]
+        process["path_masked"] = "/usr/local/bin/n**e"
+        host_snapshot(self.sample, self.host, self.now)
+        self.tick(self.now, fresh=True)
+        detail = next(row["detail"] for row in self.faults() if row["key"].endswith(":memory_pressure"))
+        self.assertIn("RSS 第 1：/usr/local/bin/n**e，640.0 MiB", detail)
+        self.assertNotIn("wo**er", detail)
+        del process["path_masked"]
+        self.tick(self.now + 60, fresh=True)
+        detail = next(row["detail"] for row in self.faults() if row["key"].endswith(":memory_pressure"))
+        self.assertIn("RSS 第 1：wo**er，640.0 MiB", detail)
+
+    def test_memory_executable_path_rejects_unsafe_or_unmasked_input(self):
+        for path in ("/n**e", "/usr/bin/n**e", "/usr/bin/ab", "/" + "a" * 505 + "/n**e"):
+            with self.subTest(path=path):
+                self.assertTrue(host_process_path_valid(path))
+        self.memory_sample(name="n**e")
+        for path in (None, True, "", "/", "usr/bin/n**e", "https://example.invalid/n**e", "/usr/bin/node",
+                     "/usr/bin/ng***", "/usr/bin/***", "/usr/bin/n****e", "/usr/../bin/n**e", "/usr/./bin/n**e",
+                     "/usr//bin/n**e", "/usr/bin/n**e/", "/usr/b*n/n**e", "/usr/bin/n**e?token=secret",
+                     "/usr/bin/n**e --secret", "/usr/bin/n**e\n", "/usr/bin/n**e (deleted)",
+                     "/usr/bin/n**\\e", "/usr/bin/'n**e'", "/usr/例/n**e", "/usr/bin/.", "/usr/bin/..",
+                     "/" + "a" * 507 + "/n**e"):
+            with self.subTest(path=path):
+                self.assertFalse(host_process_path_valid(path))
+                self.sample["diagnostics"]["memory_top_process"]["path_masked"] = path
+                with self.assertRaisesRegex(ValueError, "INVALID_HOST_DIAGNOSTICS"):
+                    host_snapshot(self.sample, self.host, self.now)
+
+    def test_memory_executable_path_change_at_same_sample_is_replay(self):
+        self.memory_sample(name="n**e")
+        self.sample["diagnostics"]["memory_top_process"]["path_masked"] = "/usr/bin/n**e"
+        self.tick(self.now, fresh=True)
+        self.sample["diagnostics"]["memory_top_process"]["path_masked"] = "/opt/bin/n**e"
+        self.write_sample()
+        status = self.tick(self.now + 60)
+        self.assertIn("host:example-router:memory_pressure", status["host_health_blocked_checks"])
+
+    def test_memory_diagnostics_watermark_preserves_legacy_and_detects_same_sample_change(self):
+        core = {key: self.sample.get(key) for key in ("message_id", "boot_id", "sequence", "read_time_utc", "uptime_seconds", "metrics", "conditions")}
+        expected = hashlib.sha256(json.dumps(core, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+        self.assertEqual(host_snapshot(self.sample, self.host, self.now)[1], expected)
+        self.memory_sample()
+        self.tick(self.now, fresh=True)
+        self.sample["diagnostics"]["memory_top_process"]["rss_bytes"] += 1
+        self.write_sample()
+        status = self.tick(self.now + 60)
+        self.assertIn("host:example-router:memory_pressure", status["host_health_blocked_checks"])
+
+    def test_memory_detail_refresh_keeps_pending_id_attempts_and_incident_anchors(self):
+        self.memory_sample()
+        self.cfg["notifications"]["enabled"] = True
+        self.tick(self.now, fresh=True, sender=lambda *_: False)
+        key = "host:example-router:memory_pressure"
+        before_fault = dict(self.monitor.state.db.execute("SELECT * FROM fault WHERE key=?", (key,)).fetchone())
+        before_pending = next(row for row in self.outbox() if row["fault_key"] == key)
+        self.sample["metrics"]["memory_available_bytes"] = 180 * 1024 ** 2
+        self.sample["diagnostics"]["memory_top_process"] = {"name_masked": "ab***", "rss_bytes": 700 * 1024 ** 2}
+        self.tick(self.now + 30, fresh=True, sender=lambda *_: self.fail("Detail refresh must not bypass HTTP retry"))
+        after_fault = dict(self.monitor.state.db.execute("SELECT * FROM fault WHERE key=?", (key,)).fetchone())
+        after_pending = next(row for row in self.outbox() if row["fault_key"] == key)
+        self.assertIn("180.0 MiB", after_fault["detail"])
+        self.assertIn("ab***，700.0 MiB", after_pending["detail"])
+        self.assertEqual({k: v for k, v in before_fault.items() if k != "detail"}, {k: v for k, v in after_fault.items() if k != "detail"})
+        self.assertEqual({k: v for k, v in before_pending.items() if k != "detail"}, {k: v for k, v in after_pending.items() if k != "detail"})
+
+    def test_memory_detail_refresh_after_ack_does_not_create_an_extra_notice(self):
+        self.memory_sample()
+        self.cfg["notifications"]["enabled"] = True
+        self.cfg["reminder_backoff"] = {"enabled": True, "max_seconds": 86400}
+        self.cfg["repeat_seconds"] = 7200
+        self.tick(self.now, fresh=True)
+        key = "host:example-router:memory_pressure"
+        before = dict(self.monitor.state.db.execute("SELECT * FROM fault WHERE key=?", (key,)).fetchone())
+        self.sample["metrics"]["memory_available_bytes"] = 170 * 1024 ** 2
+        self.tick(self.now + 60, fresh=True, sender=lambda *_: self.fail("No extra alert for a new measurement"))
+        after = dict(self.monitor.state.db.execute("SELECT * FROM fault WHERE key=?", (key,)).fetchone())
+        self.assertEqual({k: v for k, v in before.items() if k != "detail"}, {k: v for k, v in after.items() if k != "detail"})
+        self.assertFalse(self.outbox())
 
     def action(self, result="succeeded", moment=None, action_id=None):
         return {"event_id": str(uuid.uuid4()), "action_id": action_id or str(uuid.uuid4()), "incident_id": str(uuid.uuid4()),

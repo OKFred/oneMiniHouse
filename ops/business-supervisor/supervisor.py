@@ -9,6 +9,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import signal
 import sqlite3
 import ssl
@@ -104,6 +105,9 @@ HOST_CONDITIONS = {
 }
 HOST_DETAIL_CODES = {"none", "metric_unavailable", "memory_available_low", "memory_available_critical", "io_wait_blocked", "temperature_high", "storage_low"}
 HOST_ACTION_RESULTS = {"claimed": "已记录执行意图，尚未确认结果", "succeeded": "执行成功", "failed": "执行失败", "uncertain": "执行结果不确定"}
+HOST_LEGACY_MASKED_PROCESS = re.compile(r"[A-Za-z0-9_.-]{0,2}\*\*\*\Z")
+HOST_MIDDLE_MASKED_PROCESS = re.compile(r"(?:[A-Za-z0-9_.-]{1,2}|[A-Za-z0-9_.-]+\*{1,3}[A-Za-z0-9_.-]+)\Z")
+HOST_PROCESS_PATH_SEGMENT = re.compile(r"[A-Za-z0-9_.-]+\Z")
 
 
 def canonical_uuid(value) -> bool:
@@ -136,6 +140,43 @@ def reminder_category(key: str) -> str:
     return prefix if prefix in {"mqtt", "target", "queue", "storage", "collector"} else "other"
 
 
+def reminder_backoff_enabled(cfg: dict) -> bool:
+    return cfg.get("reminder_backoff", {}).get("enabled", False) is True
+
+
+def reminder_base_seconds(cfg: dict, key: str) -> int:
+    override = cfg.get("reminder_seconds_by_category", {}).get(reminder_category(key))
+    if reminder_backoff_enabled(cfg):
+        return max(cfg["repeat_seconds"], override if override is not None else 0)
+    return cfg["repeat_seconds"] if override is None else override
+
+
+def reminder_interval_seconds(cfg: dict, key: str, step: int | None = 0) -> int:
+    """Bounded exponential spacing; this is separate from HTTP retry backoff."""
+    interval = reminder_base_seconds(cfg, key)
+    if not reminder_backoff_enabled(cfg):
+        return interval
+    cap = max(interval, cfg["reminder_backoff"].get("max_seconds", 86400))
+    # SQLite stages are not an exponent: clamp before arithmetic, including
+    # malformed legacy/manual values, so a huge persisted value is harmless.
+    stage = min(32, max(0, step)) if type(step) is int else 0
+    for _ in range(stage):
+        if interval >= cap:
+            break
+        interval = min(cap, interval * 2)
+    return interval
+
+
+def reminder_max_step(cfg: dict, key: str) -> int:
+    interval = reminder_base_seconds(cfg, key)
+    cap = max(interval, cfg.get("reminder_backoff", {}).get("max_seconds", 86400))
+    step = 0
+    while interval < cap and step < 32:
+        interval = min(cap, interval * 2)
+        step += 1
+    return step
+
+
 def device_check_key(device: dict) -> str:
     return "device:" + "/".join(part for part in (device.get("site_id"), device["gateway_id"], device["device_id"]) if part)
 
@@ -162,6 +203,13 @@ def load_config(path: str) -> dict:
     reminders = cfg.setdefault("reminder_seconds_by_category", {})
     if not isinstance(reminders, dict) or any(category not in REMINDER_CATEGORIES or type(value) is not int or value < 3600 or value > 604800 for category, value in reminders.items()):
         raise ValueError("INVALID_REMINDER_OVERRIDES")
+    backoff = cfg.setdefault("reminder_backoff", {})
+    if not isinstance(backoff, dict) or set(backoff) - {"enabled", "max_seconds"}:
+        raise ValueError("INVALID_REMINDER_BACKOFF")
+    backoff.setdefault("enabled", False)  # Missing blocks preserve the previous fixed schedule.
+    backoff.setdefault("max_seconds", 86400)
+    if type(backoff["enabled"]) is not bool or type(backoff["max_seconds"]) is not int or not 3600 <= backoff["max_seconds"] <= 604800:
+        raise ValueError("INVALID_REMINDER_BACKOFF")
     cfg.setdefault("devices", [])
     cfg.setdefault("targets", [])
     cfg.setdefault("mqtt_client_ids", [])
@@ -278,7 +326,7 @@ class State:
         with self.db:
             columns = {row["name"] for row in self.db.execute("PRAGMA table_info(fault)")}
             for column, sql_type in (("good_since_time_utc", "REAL"), ("last_good_time_utc", "REAL"), ("notified_highest_severity", "TEXT"),
-                                     ("notification_retry_after_time_utc", "REAL"), ("notification_retry_attempts", "INTEGER"), ("notification_event_id", "TEXT")):
+                                     ("notification_retry_after_time_utc", "REAL"), ("notification_retry_attempts", "INTEGER"), ("notification_event_id", "TEXT"), ("reminder_backoff_step", "INTEGER")):
                 if column not in columns:
                     self.db.execute(f"ALTER TABLE fault ADD COLUMN {column} {sql_type}")
             for column in ("alerts_paused_time_utc", "alerts_recheck_bad_since_time_utc"):
@@ -293,7 +341,7 @@ class State:
               AND NOT EXISTS (SELECT 1 FROM outbox WHERE fault_key=fault.key AND severity='critical'
                 AND kind IN ('failure','escalation','reminder')) THEN 'critical' ELSE 'warning' END
               WHERE notified=1 AND notified_highest_severity IS NULL""")
-            self.set("state_schema_version", 4)
+            self.set("state_schema_version", 5)
 
     def get(self, key, default=None):
         row = self.db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
@@ -525,6 +573,65 @@ def resource_observations(cfg: dict, now: float, state: State, health: dict | No
     return result
 
 
+def host_process_name_valid(value, legacy: bool = True) -> bool:
+    """Bounded ASCII identity; new masks retain both ends with at most 3 stars."""
+    return (isinstance(value, str) and 1 <= len(value) <= 64
+            and (HOST_MIDDLE_MASKED_PROCESS.fullmatch(value) is not None
+                 or legacy and HOST_LEGACY_MASKED_PROCESS.fullmatch(value) is not None))
+
+
+def host_process_path_valid(value) -> bool:
+    """Accept a lexical absolute POSIX executable path, never a URL or command."""
+    if not isinstance(value, str) or not 2 <= len(value) <= 512 or not value.startswith("/"):
+        return False
+    parts = value[1:].split("/")
+    return (all(part not in ("", ".", "..") for part in parts)
+            and all(HOST_PROCESS_PATH_SEGMENT.fullmatch(part) is not None for part in parts[:-1])
+            and host_process_name_valid(parts[-1], legacy=False))
+
+
+def host_memory_diagnostics(record: dict) -> dict | None:
+    """Accept only an optional, source-masked RSS winner; never raw process text."""
+    if "diagnostics" not in record:
+        return None
+    diagnostics = record["diagnostics"]
+    if not isinstance(diagnostics, dict) or set(diagnostics) != {"memory_top_process"}:
+        raise ValueError("INVALID_HOST_DIAGNOSTICS")
+    process = diagnostics["memory_top_process"]
+    if (not isinstance(process, dict) or not {"name_masked", "rss_bytes"} <= set(process)
+            or set(process) - {"name_masked", "rss_bytes", "path_masked"}
+            or not host_process_name_valid(process["name_masked"])
+            or "path_masked" in process and not host_process_path_valid(process["path_masked"])
+            or type(process["rss_bytes"]) is not int or not 0 <= process["rss_bytes"] <= 2 ** 53 - 1):
+        raise ValueError("INVALID_HOST_DIAGNOSTICS")
+    return process
+
+
+def host_memory_detail(label: str, record: dict, condition: dict) -> str:
+    """Describe one valid sample, without inferring a cause or another threshold."""
+    metrics, mib = record["metrics"], 1024 * 1024
+    total, available = metrics.get("memory_total_bytes"), metrics.get("memory_available_bytes")
+    total_valid = type(total) is int and 0 < total <= 2 ** 53 - 1
+    available_valid = type(available) is int and 0 <= available <= 2 ** 53 - 1
+    if total_valid and available_valid and available > total:
+        memory = "可用/总内存：不可用（数值不一致）；内存占用率：不可用"
+    else:
+        available_text = f"{available / mib:.1f} MiB" if available_valid else "不可用"
+        total_text = f"{total / mib:.1f} MiB" if total_valid else "不可用"
+        used_text = f"{(total - available) / total * 100:.1f}%" if total_valid and available_valid else "不可用"
+        memory = f"可用/总内存：{available_text} / {total_text}；内存占用率（总量−可用）：{used_text}"
+    trigger = {"memory_available_low": "可用内存 < 256 MiB 持续 120 秒",
+               "memory_available_critical": "可用内存 < 128 MiB 持续 60 秒"}.get(condition["detail_code"])
+    process = host_memory_diagnostics(record)
+    process_text = (f"RSS 第 1：{process.get('path_masked', process['name_masked'])}，{process['rss_bytes'] / mib:.1f} MiB"
+                    if process is not None else "RSS 第 1：不可用")
+    lines = [label + "内存压力异常", memory, process_text]
+    if trigger is not None:
+        lines.append("触发条件：" + trigger)
+    lines.append("样本时间：" + record["read_time_utc"])
+    return "；".join(lines)
+
+
 def host_snapshot(record: dict, host: dict, now: float) -> tuple[float, str]:
     """Validate the bounded receiver export; never use its file modification time."""
     read = timestamp(record.get("read_time_utc"))
@@ -550,6 +657,10 @@ def host_snapshot(record: dict, host: dict, now: float) -> tuple[float, str]:
     # Actions are merged independently by the receiver. They may change without
     # advancing the resource sample, so exclude them from the resource watermark.
     core = {key: record.get(key) for key in ("message_id", "boot_id", "sequence", "read_time_utc", "uptime_seconds", "metrics", "conditions")}
+    if "diagnostics" in record:
+        host_memory_diagnostics(record)
+        # Preserve legacy fingerprints when the optional extension is absent.
+        core["diagnostics"] = record["diagnostics"]
     return read, hashlib.sha256(json.dumps(core, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 
 
@@ -621,7 +732,8 @@ def host_health_observations(cfg: dict, now: float, startup: float, state: State
                 blocked.add(key)
                 observations.append(Observation(key, "unknown", label + title + "状态缺失或无效，暂停判断"))
             else:
-                observations.append(Observation(key, value["state"], label + title + "异常", value["severity"]))
+                detail = host_memory_detail(label, record, value) if kind == "memory_pressure" else label + title + "异常"
+                observations.append(Observation(key, value["state"], detail, value["severity"]))
     return observations, blocked, action_sources
 
 
@@ -676,10 +788,46 @@ class Supervisor:
         self.notification_error = None
         self.host_notification_blocks = {"host:" + host["id"] + ":" + kind for host in cfg.get("host_health_sources", []) for kind in (*HOST_CONDITIONS, "reporting")}
         with self.state.db:
+            self.seed_reminder_backoff(self.startup)
             self.sync_device_pauses(self.startup)
             # A new process must obtain a new bad observation before completing
             # an administrative-pause recheck; it cannot count unobserved downtime.
             self.state.db.execute("UPDATE fault SET alerts_recheck_bad_since_time_utc=NULL WHERE alerts_paused_time_utc IS NOT NULL")
+
+    def seed_reminder_backoff(self, now: float):
+        if not reminder_backoff_enabled(self.cfg):
+            return
+        # NULL distinguishes pre-policy incidents. Seed each row once from its
+        # observed age; this is a policy stage, not a claim about past ACK counts.
+        for row in self.state.db.execute("SELECT * FROM fault WHERE reminder_backoff_step IS NULL").fetchall():
+            step = 0
+            if row["active"] and row["notified"] and row["first_bad_time_utc"] is not None:
+                anchor = row["last_sent_time_utc"] if row["last_sent_time_utc"] is not None else now
+                elapsed = max(0, anchor - row["first_bad_time_utc"])
+                interval = reminder_base_seconds(self.cfg, row["key"])
+                cap = max(interval, self.cfg["reminder_backoff"].get("max_seconds", 86400))
+                while interval < cap and elapsed >= interval and step < 32:
+                    elapsed -= interval
+                    interval = min(cap, interval * 2)
+                    step += 1
+            self.state.db.execute("UPDATE fault SET reminder_backoff_step=? WHERE key=? AND reminder_backoff_step IS NULL", (step, row["key"]))
+
+    def reminder_interval(self, key: str, fault=None) -> int:
+        if fault is None:
+            fault = self.state.db.execute("SELECT * FROM fault WHERE key=?", (key,)).fetchone()
+        return reminder_interval_seconds(self.cfg, key, fault["reminder_backoff_step"] if fault is not None else 0)
+
+    def reminder_deliverable(self, row, now: float) -> bool:
+        if row["kind"] != "reminder" or not reminder_backoff_enabled(self.cfg):
+            return True
+        fault = self.state.db.execute("SELECT * FROM fault WHERE key=?", (row["fault_key"],)).fetchone()
+        if fault is None or not fault["active"]:
+            return False
+        if fault["last_sent_time_utc"] is None or fault["notified_highest_severity"] is None:
+            return True  # Never turn an unacknowledged initial obligation into silence.
+        # Re-evaluate after config changes/restarts, even for an old hourly item
+        # already in outbox. Holding it keeps the same ID, attempts and retry time.
+        return now >= fault["last_sent_time_utc"] + self.reminder_interval(row["fault_key"], fault)
 
     def sync_device_pauses(self, now: float):
         for row in self.state.db.execute("SELECT key FROM fault").fetchall():
@@ -756,7 +904,7 @@ class Supervisor:
                                     (now - cfg["max_age_seconds"], cfg["max_attempts"], int(cfg["max_pending"]))).fetchall()
         for row in rows:
             if row["kind"] in FAILURE_KINDS:
-                interval = self.cfg.get("reminder_seconds_by_category", {}).get(reminder_category(row["fault_key"]), self.cfg["repeat_seconds"])
+                interval = self.reminder_interval(row["fault_key"])
                 exhausted = row["attempts"] >= cfg["max_attempts"]
                 # An active, unacknowledged incident still owes its first notice.
                 # Persist retry evidence outside bounded outbox, so eviction and
@@ -801,14 +949,14 @@ class Supervisor:
                     self.state.db.execute("DELETE FROM outbox WHERE fault_key=? AND kind='recovery'", (observation.key,))
                 if row["active"] and row["notified"]:
                     self.enqueue(observation.key, "recovery", row["notified_highest_severity"] or row["severity"], "已持续恢复；原故障：" + row["detail"], now)
-                self.state.db.execute("UPDATE fault SET active=0,first_bad_time_utc=NULL,notified=0,notified_highest_severity=NULL,good_since_time_utc=NULL,last_good_time_utc=NULL,notification_retry_after_time_utc=NULL,notification_retry_attempts=NULL,notification_event_id=NULL,alerts_paused_time_utc=NULL,alerts_recheck_bad_since_time_utc=NULL WHERE key=?", (observation.key,))
+                self.state.db.execute("UPDATE fault SET active=0,first_bad_time_utc=NULL,notified=0,notified_highest_severity=NULL,good_since_time_utc=NULL,last_good_time_utc=NULL,notification_retry_after_time_utc=NULL,notification_retry_attempts=NULL,notification_event_id=NULL,alerts_paused_time_utc=NULL,alerts_recheck_bad_since_time_utc=NULL,reminder_backoff_step=? WHERE key=?", (0 if reminder_backoff_enabled(self.cfg) else None, observation.key))
                 continue
             if not row:
-                self.state.db.execute("INSERT INTO fault(key,first_bad_time_utc,severity,detail) VALUES (?,?,?,?)", (observation.key, now, observation.severity, observation.detail))
+                self.state.db.execute("INSERT INTO fault(key,first_bad_time_utc,severity,detail,reminder_backoff_step) VALUES (?,?,?,?,?)", (observation.key, now, observation.severity, observation.detail, 0 if reminder_backoff_enabled(self.cfg) else None))
                 row = self.state.db.execute("SELECT * FROM fault WHERE key=?", (observation.key,)).fetchone()
             elif row["first_bad_time_utc"] is None:
                 self.state.db.execute("DELETE FROM outbox WHERE fault_key=?", (observation.key,))
-                self.state.db.execute("UPDATE fault SET first_bad_time_utc=?,severity=?,detail=?,last_sent_time_utc=NULL,last_enqueue_time_utc=NULL,notified=0,notified_highest_severity=NULL,notification_retry_after_time_utc=NULL,notification_retry_attempts=NULL,notification_event_id=NULL,alerts_paused_time_utc=NULL,alerts_recheck_bad_since_time_utc=NULL WHERE key=?", (now, observation.severity, observation.detail, observation.key))
+                self.state.db.execute("UPDATE fault SET first_bad_time_utc=?,severity=?,detail=?,last_sent_time_utc=NULL,last_enqueue_time_utc=NULL,notified=0,notified_highest_severity=NULL,notification_retry_after_time_utc=NULL,notification_retry_attempts=NULL,notification_event_id=NULL,alerts_paused_time_utc=NULL,alerts_recheck_bad_since_time_utc=NULL,reminder_backoff_step=? WHERE key=?", (now, observation.severity, observation.detail, 0 if reminder_backoff_enabled(self.cfg) else None, observation.key))
                 row = self.state.db.execute("SELECT * FROM fault WHERE key=?", (observation.key,)).fetchone()
             self.state.db.execute("UPDATE fault SET detail=?,good_since_time_utc=NULL,last_good_time_utc=NULL WHERE key=?", (observation.detail[:1000], observation.key))
             confirmation_start = row["first_bad_time_utc"]
@@ -825,8 +973,8 @@ class Supervisor:
             pending = self.state.db.execute("SELECT * FROM outbox WHERE fault_key=? AND kind IN ('failure','escalation','reminder')", (observation.key,)).fetchone()
             highest = row["notified_highest_severity"]
             upgrade_due = highest is not None and severity_rank(observation.severity) > severity_rank(highest)
-            repeat_from = row["last_sent_time_utc"] or row["last_enqueue_time_utc"] or 0
-            repeat_interval = self.cfg.get("reminder_seconds_by_category", {}).get(reminder_category(observation.key), self.cfg["repeat_seconds"])
+            repeat_from = row["last_sent_time_utc"] if row["last_sent_time_utc"] is not None else row["last_enqueue_time_utc"] if row["last_enqueue_time_utc"] is not None else 0
+            repeat_interval = self.reminder_interval(observation.key, row)
             repeat_due = now - repeat_from >= repeat_interval
             retry_ready = row["notification_retry_after_time_utc"] is None or now >= row["notification_retry_after_time_utc"]
             if not row["active"]:
@@ -859,7 +1007,7 @@ class Supervisor:
             candidates = self.state.db.execute("SELECT * FROM outbox WHERE next_attempt_time_utc<=? AND suspended_time_utc IS NULL AND kind NOT LIKE 'test%' ORDER BY create_time_utc,id", (now,)).fetchall()
         else:
             candidates = self.state.db.execute("SELECT * FROM outbox WHERE next_attempt_time_utc<=? AND suspended_time_utc IS NULL AND fault_key=? ORDER BY create_time_utc,id", (now, only_key)).fetchall()
-        rows = [row for row in candidates if not self.device_notification_blocked(row["fault_key"])][:20]
+        rows = [row for row in candidates if not self.device_notification_blocked(row["fault_key"]) and self.reminder_deliverable(row, now)][:20]
         if not rows:
             return "idle"
         last_attempt = self.state.get("last_request_time_utc", 0)
@@ -909,10 +1057,13 @@ class Supervisor:
             for row in rows:
                 self.state.db.execute("DELETE FROM outbox WHERE id=?", (row["id"],))
                 if row["kind"] in FAILURE_KINDS:
-                    fault = self.state.db.execute("SELECT notified_highest_severity FROM fault WHERE key=? AND active=1", (row["fault_key"],)).fetchone()
+                    fault = self.state.db.execute("SELECT * FROM fault WHERE key=? AND active=1", (row["fault_key"],)).fetchone()
                     if fault:
                         highest = row["severity"] if severity_rank(row["severity"]) > severity_rank(fault["notified_highest_severity"]) else fault["notified_highest_severity"]
-                        self.state.db.execute("UPDATE fault SET notified=1,last_sent_time_utc=?,notified_highest_severity=?,notification_retry_after_time_utc=NULL,notification_retry_attempts=NULL,notification_event_id=NULL WHERE key=? AND active=1", (now, highest, row["fault_key"]))
+                        step = fault["reminder_backoff_step"]
+                        if row["kind"] == "reminder" and reminder_backoff_enabled(self.cfg):
+                            step = min(reminder_max_step(self.cfg, row["fault_key"]), max(0, step if type(step) is int else 0) + 1)
+                        self.state.db.execute("UPDATE fault SET notified=1,last_sent_time_utc=?,notified_highest_severity=?,notification_retry_after_time_utc=NULL,notification_retry_attempts=NULL,notification_event_id=NULL,reminder_backoff_step=? WHERE key=? AND active=1", (now, highest, step, row["fault_key"]))
             self.state.set("last_notification_success_time_utc", utc(now))
         self.notification_error = None
         return "sent"
@@ -969,7 +1120,11 @@ class Supervisor:
             if self.notification_error == "CLOCK_ROLLBACK":
                 self.notification_error = None
             result = self.deliver(now, sender)
-        faults = [dict(row) for row in self.state.db.execute("SELECT key,severity,detail,first_bad_time_utc,good_since_time_utc,last_good_time_utc,notified_highest_severity FROM fault WHERE active=1 ORDER BY key") if not self.device_notification_blocked(row["key"])]
+        faults = [dict(row) for row in self.state.db.execute("SELECT key,severity,detail,first_bad_time_utc,good_since_time_utc,last_good_time_utc,notified_highest_severity,last_sent_time_utc,reminder_backoff_step FROM fault WHERE active=1 ORDER BY key") if not self.device_notification_blocked(row["key"])]
+        for fault in faults:
+            fault["reminder_interval_seconds"] = self.reminder_interval(fault["key"], fault)
+            fault["next_reminder_time_utc"] = (utc(fault["last_sent_time_utc"] + fault["reminder_interval_seconds"])
+                                                   if fault["last_sent_time_utc"] is not None and fault["notified_highest_severity"] is not None else None)
         pending = sum(1 for row in self.state.db.execute("SELECT fault_key FROM outbox WHERE kind NOT LIKE 'test%' AND suspended_time_utc IS NULL") if not self.device_notification_blocked(row["fault_key"]))
         suspended = self.state.db.execute("SELECT count(*) FROM outbox WHERE kind NOT LIKE 'test%' AND suspended_time_utc IS NOT NULL").fetchone()[0]
         test_pending = self.state.db.execute("SELECT count(*) FROM outbox WHERE kind LIKE 'test%'").fetchone()[0]

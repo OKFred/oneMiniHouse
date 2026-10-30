@@ -51,6 +51,58 @@ test('host route is one exact topic and never a wildcard or mismatched site/host
   for (const mutation of [{ site_id: 'another-home' }, { host_id: 'another-router' }]) assert.throws(() => raw({ ...fixture(), ...mutation }));
 });
 
+test('optional masked memory diagnostic is preserved raw without changing temperature processing or identity', () => {
+  const legacy = raw();
+  const value = { ...fixture(), diagnostics: { memory_top_process: { name_masked: 'de***', rss_bytes: 123456789 } } };
+  const record = raw(value), processed = hostHealthProcessor.process(record);
+  assert.equal(record.raw_id, legacy.raw_id);
+  assert.equal(record.raw_data_sha256, hash(encode(value)));
+  assert.deepEqual(JSON.parse(record.raw_data).diagnostics, value.diagnostics);
+  assert.deepEqual(processed, hostHealthProcessor.process(legacy));
+  for (const name_masked of ['***', 'a***', 'xy***', '_.***']) {
+    assert.doesNotThrow(() => raw({ ...fixture(), diagnostics: { memory_top_process: { name_masked, rss_bytes: 0 } } }));
+  }
+});
+
+test('memory diagnostic rejects raw process text, injected fields and invalid byte counts', () => {
+  for (const diagnostics of [null, {}, [], { memory_top_process: null },
+    { memory_top_process: { name_masked: 'de***', rss_bytes: 123, pid: 42 } },
+    { memory_top_process: { name_masked: 'de***', rss_bytes: 123 }, cmdline: 'example' }]) {
+    assert.throws(() => raw({ ...fixture(), diagnostics }));
+  }
+  for (const name_masked of ['daemon', 'daemon***', '', 'a**', 'xy***\n', 'x\n***', '<x***', '温***']) {
+    assert.throws(() => raw({ ...fixture(), diagnostics: { memory_top_process: { name_masked, rss_bytes: 123 } } }));
+  }
+  for (const rss_bytes of [-1, 0.5, true, '1', null, Number.MAX_SAFE_INTEGER + 1, Infinity]) {
+    assert.throws(() => raw({ ...fixture(), diagnostics: { memory_top_process: { name_masked: 'de***', rss_bytes } } }));
+  }
+});
+
+test('readable middle mask and optional absolute executable path preserve CPU-only output and exact archive', () => {
+  const legacy = hostHealthProcessor.process(raw());
+  for (const [name_masked, path_masked] of [['n**e', '/usr/bin/n**e'], ['ex***le', '/opt/example/da***on'],
+    ['x', '/x'], ['sh', '/bin/sh'], ['a*c', '/a*c'], ['long-prefix***long-suffix', '/usr/local/bin/long-prefix***long-suffix']]) {
+    const value = { ...fixture(), diagnostics: { memory_top_process: { name_masked, path_masked, rss_bytes: 123 } } };
+    const record = raw(value);
+    assert.deepEqual(JSON.parse(record.raw_data).diagnostics, value.diagnostics);
+    assert.deepEqual(hostHealthProcessor.process(record), legacy);
+  }
+  assert.doesNotThrow(() => raw({ ...fixture(), diagnostics: { memory_top_process: { name_masked: 'n**e', rss_bytes: 0 } } }));
+});
+
+test('process paths cannot contain traversal, arguments, raw long basenames or unsafe characters', () => {
+  for (const path_masked of [null, '', 'usr/bin/n**e', '/', '/node', '/usr/bin/node', '/usr/bin/no***',
+    '/usr//n**e', '/./n**e', '/../n**e', '/usr/../n**e', '/usr/./n**e', '/usr/bin/.', '/usr/bin/..',
+    '/usr/bin/n**e/', '/usr/bin/n**e\n', '/usr/bin/n**e --token=example', '/usr/bin/n****e', '/usr/bin/n*o*e',
+    '/usr/bin/n**e?token=example', '/usr\\bin/n**e', '/us*r/bin/n**e', '/温度/n**e',
+    '/usr/bin/' + 'a'.repeat(63) + '*z', '/' + 'directory/'.repeat(60) + 'n**e']) {
+    assert.throws(() => raw({ ...fixture(), diagnostics: { memory_top_process: { name_masked: 'n**e', path_masked, rss_bytes: 123 } } }));
+  }
+  for (const name_masked of ['n****e', 'n*o*e', '***node', 'a'.repeat(63) + '*z', 'n**e\n']) {
+    assert.throws(() => raw({ ...fixture(), diagnostics: { memory_top_process: { name_masked, rss_bytes: 123 } } }));
+  }
+});
+
 test('CPU range matches native sanity boundary, genuine zero is preserved and unavailable cannot become zero', () => {
   for (const temperature of [-50, 0, 85, 150]) {
     const value = fixture(); value.metrics.cpu_temperature_c = temperature;

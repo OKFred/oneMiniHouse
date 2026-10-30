@@ -97,6 +97,150 @@ def validate_metrics(metrics):
             raise ValueError('INVALID_METRIC_RANGE')
 
 
+def masked_process_name(value, *, legacy=True):
+    if not isinstance(value, str) or not 1 <= len(value) <= 64:
+        return False
+    return (re.fullmatch(r'[A-Za-z0-9_.-]{1,2}', value) is not None
+            or re.fullmatch(r'[A-Za-z0-9_.-]+\*{1,3}[A-Za-z0-9_.-]+', value) is not None
+            or legacy and re.fullmatch(r'[A-Za-z0-9_.-]{0,2}\*{3}', value) is not None)
+
+
+def mask_process_name(value):
+    if not isinstance(value, str) or re.fullmatch(r'[A-Za-z0-9_.-]{1,64}', value) is None:
+        raise ValueError('INVALID_PROCESS_NAME')
+    if len(value) <= 2:
+        return value
+    hidden = min(1, len(value) - 2)
+    start = (len(value) - hidden) // 2
+    return value[:start] + '*' * hidden + value[start + hidden:]
+
+
+def masked_process_path(value):
+    if not isinstance(value, str) or not value.startswith('/') or len(value) > 512:
+        return False
+    parts = value.split('/')[1:]
+    return (bool(parts) and all(part not in ('', '.', '..')
+                              and re.fullmatch(r'[A-Za-z0-9_.-]+', part) is not None for part in parts[:-1])
+            and parts[-1] not in ('', '.', '..') and masked_process_name(parts[-1], legacy=False))
+
+
+def mask_process_path(value):
+    if not isinstance(value, str) or not value.startswith('/') or len(value) > 512:
+        return None
+    parts = value.split('/')[1:]
+    if not parts or any(part in ('', '.', '..') or re.fullmatch(r'[A-Za-z0-9_.-]+', part) is None for part in parts):
+        return None
+    if len(parts[-1]) > 64:
+        return None
+    parts[-1] = mask_process_name(parts[-1])
+    return '/' + '/'.join(parts)
+
+
+def validate_diagnostics(value):
+    """Only an already masked process label and RSS may cross the MQTT boundary."""
+    if not isinstance(value, dict) or set(value) != {'memory_top_process'}:
+        raise ValueError('INVALID_DIAGNOSTICS')
+    process = value['memory_top_process']
+    if (not isinstance(process, dict) or set(process) - {'path_masked'} != {'name_masked', 'rss_bytes'}
+            or not masked_process_name(process['name_masked'])
+            or type(process['rss_bytes']) is not int or not 0 <= process['rss_bytes'] <= 2**53 - 1):
+        raise ValueError('INVALID_DIAGNOSTICS')
+    if 'path_masked' in process and not masked_process_path(process['path_masked']):
+        raise ValueError('INVALID_DIAGNOSTICS')
+
+
+def process_start(directory):
+    text = read_small(directory / 'stat', 4096)
+    closing = text.rfind(')')
+    if closing <= 0:
+        raise ValueError('INVALID_PROCESS_START')
+    fields = text[closing + 2:].split()
+    if len(fields) < 20 or not fields[19].isascii() or not fields[19].isdigit():
+        raise ValueError('INVALID_PROCESS_START')
+    return fields[19]
+
+
+def memory_top_process(proc=Path('/proc'), *, maximum_processes=4096,
+                       maximum_entries=8192, maximum_seconds=0.2, clock=time.monotonic):
+    """RSS rank among readable process snapshots; omit incomplete scans.
+
+    /proc/<pid>/status exposes VmRSS in KiB, unlike virtual address space.
+    See https://docs.kernel.org/filesystems/proc.html (status/VmRSS).
+    This is a sequential snapshot, not an atomic accounting of all processes.
+    No command line, environment or PID leaves this function. Executable paths
+    come only from the winning PID's /proc/exe link; only its basename is masked.
+    """
+    started, entries, processes, highest, winning = clock(), 0, 0, None, None
+    try:
+        with os.scandir(proc) as scan:
+            for entry in scan:
+                entries += 1
+                if entries > maximum_entries or clock() - started > maximum_seconds:
+                    return None
+                if not entry.name.isascii() or not entry.name.isdigit():
+                    continue
+                if not entry.is_dir(follow_symlinks=False):
+                    return None
+                processes += 1
+                if processes > maximum_processes:
+                    return None
+                try:
+                    directory = Path(entry.path)
+                    text = read_small(directory / 'status', 8192)
+                except FileNotFoundError:
+                    continue  # A process may exit during the scan.
+                name = re.search(r'^Name:[ \t]+([^\n]+)$', text, re.M)
+                rss = re.search(r'^VmRSS:[ \t]+(\d+)[ \t]+kB$', text, re.M)
+                if not name:
+                    return None
+                if not rss:
+                    # Kernel threads and zombies legitimately have no VmRSS.
+                    if re.search(r'^VmRSS:', text, re.M):
+                        return None
+                    continue
+                resident = int(rss.group(1)) * 1024
+                if not 0 <= resident <= 2**53 - 1:
+                    return None
+                if highest is None or resident > highest['rss_bytes']:
+                    # Only a possible new leader needs an identity-bound RSS
+                    # read. Do not double procfs I/O for every non-leading PID.
+                    start = process_start(directory)
+                    confirmed = read_small(directory / 'status', 8192)
+                    name = re.search(r'^Name:[ \t]+([^\n]+)$', confirmed, re.M)
+                    rss = re.search(r'^VmRSS:[ \t]+(\d+)[ \t]+kB$', confirmed, re.M)
+                    if name is None or rss is None or process_start(directory) != start:
+                        return None
+                    resident = int(rss.group(1)) * 1024
+                    if not 0 <= resident <= 2**53 - 1:
+                        return None
+                    if highest is not None and resident <= highest['rss_bytes']:
+                        continue  # The preliminary RSS is not authoritative.
+                    clean = re.sub(r'[^A-Za-z0-9_.-]', '_', name.group(1))
+                    highest = {'name_masked': mask_process_name(clean), 'rss_bytes': resident}
+                    winning = directory, start, name.group(1)
+        if clock() - started > maximum_seconds:
+            return None
+        if highest is not None:
+            directory, start, original_name = winning
+            if process_start(directory) != start:
+                return None
+            try:
+                executable = mask_process_path(os.readlink(directory / 'exe'))
+            except OSError:
+                executable = None
+            current_status = read_small(directory / 'status', 8192)
+            current_name = re.search(r'^Name:[ \t]+([^\n]+)$', current_status, re.M)
+            if process_start(directory) != start or current_name is None or current_name.group(1) != original_name:
+                return None
+            if executable is not None:
+                highest['path_masked'] = executable
+            if clock() - started > maximum_seconds:
+                return None
+        return highest
+    except (OSError, ValueError, UnicodeError):
+        return None
+
+
 class Sampler:
     """Read only kernel pseudo files. Storage and Docker probes run separately."""
     def __init__(self, proc=Path('/proc'), thermal_path=None, memory_cgroup_path=None):
@@ -106,7 +250,7 @@ class Sampler:
         self.previous_cpu = None
         self.previous_boot = None
 
-    def sample(self, epoch=None):
+    def sample(self, epoch=None, *, include_diagnostics=False):
         metrics, errors = {}, []
         boot = read_small(self.proc / 'sys/kernel/random/boot_id', 64).strip()
         uptime = float(read_small(self.proc / 'uptime', 128).split()[0])
@@ -170,8 +314,13 @@ class Sampler:
             except (OSError, ValueError, KeyError, UnicodeError):
                 errors.append('proxy_memory_unavailable')
         validate_metrics(metrics)
-        return {'boot_id': boot, 'uptime_seconds': uptime, 'read_time_utc': utc(epoch),
-                'metrics': metrics, 'probe_errors': sorted(set(errors))}
+        sample = {'boot_id': boot, 'uptime_seconds': uptime, 'read_time_utc': utc(epoch),
+                  'metrics': metrics, 'probe_errors': sorted(set(errors))}
+        if include_diagnostics:
+            process = memory_top_process(self.proc)
+            if process is not None:
+                sample['diagnostics'] = {'memory_top_process': process}
+        return sample
 
 
 class Sustained:

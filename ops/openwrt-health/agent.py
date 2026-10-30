@@ -24,7 +24,7 @@ if VENDOR.is_dir():
     sys.path.insert(0, str(VENDOR))
 
 from health_core import (ActionLedger, CONDITIONS, Decisions, MIB, Sampler,
-                         atomic_json, encode, read_small, utc, valid_uuid, validate_metrics)
+                         atomic_json, encode, memory_top_process, read_small, utc, valid_uuid, validate_diagnostics, validate_metrics)
 
 
 def private_file(path, maximum=65536):
@@ -300,10 +300,14 @@ class RamQueue:
 
 
 def envelope(cfg, sample, conditions, sequence, actions):
-    return {'schema_version': 1, 'message_id': str(uuid.uuid4()), 'site_id': cfg['site_id'],
-            'host_id': cfg['host_id'], 'boot_id': sample['boot_id'], 'sequence': sequence,
-            'read_time_utc': sample['read_time_utc'], 'uptime_seconds': sample['uptime_seconds'],
-            'metrics': sample['metrics'], 'conditions': conditions, 'actions': actions}
+    value = {'schema_version': 1, 'message_id': str(uuid.uuid4()), 'site_id': cfg['site_id'],
+             'host_id': cfg['host_id'], 'boot_id': sample['boot_id'], 'sequence': sequence,
+             'read_time_utc': sample['read_time_utc'], 'uptime_seconds': sample['uptime_seconds'],
+             'metrics': sample['metrics'], 'conditions': conditions, 'actions': actions}
+    if 'diagnostics' in sample:
+        validate_diagnostics(sample['diagnostics'])
+        value['diagnostics'] = sample['diagnostics']
+    return value
 
 
 def evidence(cfg, sample, conditions):
@@ -418,6 +422,12 @@ def sample_loop(cfg, config_path, stop):
                 pending = []
             new_actions = any(a['event_id'] not in seen_actions for a in pending)
             if changed or new_actions or now - last_publish >= 60:
+                # Only scan at publication (normally once/minute), not each 10s
+                # resource tick. Metrics are from the most recent resource tick.
+                sample.pop('diagnostics', None)
+                process = memory_top_process()
+                if process is not None:
+                    sample['diagnostics'] = {'memory_top_process': process}
                 sequence += 1
                 record = envelope(cfg, sample, conditions, sequence, pending)
                 queue.put(record, time.time())
@@ -550,7 +560,7 @@ def main():
     elif args.role == 'ledger':
         print(encode(ledger_worker(cfg)))
     elif args.role == 'once':
-        s = Sampler(thermal_path=cfg.get('thermal_path'), memory_cgroup_path=cfg.get('mitigation', {}).get('proxy', {}).get('memory_cgroup_path')).sample()
+        s = Sampler(thermal_path=cfg.get('thermal_path'), memory_cgroup_path=cfg.get('mitigation', {}).get('proxy', {}).get('memory_cgroup_path')).sample(include_diagnostics=True)
         p = probe(cfg)
         s['metrics'].update(p['metrics'])
         c, _ = Decisions().update(s)

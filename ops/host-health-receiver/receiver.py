@@ -44,6 +44,23 @@ def valid_uuid(value) -> bool:
         return False
 
 
+def masked_process_name(value, *, legacy=True):
+    if not isinstance(value, str) or not 1 <= len(value) <= 64:
+        return False
+    return (re.fullmatch(r'[A-Za-z0-9_.-]{1,2}', value) is not None
+            or re.fullmatch(r'[A-Za-z0-9_.-]+\*{1,3}[A-Za-z0-9_.-]+', value) is not None
+            or legacy and re.fullmatch(r'[A-Za-z0-9_.-]{0,2}\*{3}', value) is not None)
+
+
+def masked_process_path(value):
+    if not isinstance(value, str) or not value.startswith('/') or len(value) > 512:
+        return False
+    parts = value.split('/')[1:]
+    return (bool(parts) and all(part not in ('', '.', '..')
+                              and re.fullmatch(r'[A-Za-z0-9_.-]+', part) is not None for part in parts[:-1])
+            and parts[-1] not in ('', '.', '..') and masked_process_name(parts[-1], legacy=False))
+
+
 def subscribe_accepted(reasons, expected: int) -> bool:
     return len(reasons) == expected and all(type(getattr(reason, "value", reason)) is int and getattr(reason, "value", reason) == 1 for reason in reasons)
 
@@ -289,8 +306,19 @@ class Store:
 def validate_payload(source: dict, raw: bytes, now: float) -> Accepted:
     value = strict_json(raw)
     fields = {"schema_version", "message_id", "site_id", "host_id", "boot_id", "sequence", "read_time_utc", "uptime_seconds", "metrics", "conditions", "actions"}
-    if not isinstance(value, dict) or set(value) != fields or type(value.get("schema_version")) is not int or value["schema_version"] != 1:
+    if not isinstance(value, dict) or set(value) - {"diagnostics"} != fields or type(value.get("schema_version")) is not int or value["schema_version"] != 1:
         raise ValueError("INVALID_HOST_HEALTH")
+    if "diagnostics" in value:
+        diagnostics = value["diagnostics"]
+        if not isinstance(diagnostics, dict) or set(diagnostics) != {"memory_top_process"}:
+            raise ValueError("INVALID_DIAGNOSTICS")
+        process = diagnostics["memory_top_process"]
+        if (not isinstance(process, dict) or set(process) - {"path_masked"} != {"name_masked", "rss_bytes"}
+                or not masked_process_name(process["name_masked"])
+                or type(process["rss_bytes"]) is not int or not 0 <= process["rss_bytes"] <= 2**53 - 1):
+            raise ValueError("INVALID_DIAGNOSTICS")
+        if "path_masked" in process and not masked_process_path(process["path_masked"]):
+            raise ValueError("INVALID_DIAGNOSTICS")
     if value["site_id"] != source["site_id"] or value["host_id"] != source["host_id"] or not valid_uuid(value["message_id"]) or not valid_uuid(value["boot_id"]):
         raise ValueError("INVALID_HOST_IDENTITY")
     if type(value["sequence"]) is not int or not 1 <= value["sequence"] <= 9007199254740991 or type(value["uptime_seconds"]) not in (int, float) or not math.isfinite(value["uptime_seconds"]) or not 0 <= value["uptime_seconds"] <= 9007199254740991:

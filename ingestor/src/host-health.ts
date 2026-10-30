@@ -20,6 +20,19 @@ const object = (value: unknown): value is Record<string, unknown> => !!value && 
 const exact = (value: Record<string, unknown>, keys: string[]) => Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 const validUuid = (value: unknown): value is string => typeof value === 'string' && uuid.test(value);
+function maskedProcessName(value: unknown, legacy = true): value is string {
+  if (typeof value !== 'string' || value.length < 1 || value.length > 64) return false;
+  // End-of-input lookahead also rejects a trailing newline (unlike JS "$" alone).
+  return /^[A-Za-z0-9_.-]{1,2}(?![\s\S])/.test(value)
+    || /^[A-Za-z0-9_.-]+\*{1,3}[A-Za-z0-9_.-]+(?![\s\S])/.test(value)
+    || (legacy && /^[A-Za-z0-9_.-]{0,2}\*{3}(?![\s\S])/.test(value));
+}
+function maskedProcessPath(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length > 512 || !value.startsWith('/')) return false;
+  const parts = value.slice(1).split('/'), basename = parts.pop();
+  return basename !== '.' && basename !== '..' && maskedProcessName(basename, false)
+    && parts.every(part => part !== '.' && part !== '..' && /^[A-Za-z0-9_.-]+(?![\s\S])/.test(part));
+}
 function fail(): never { throw new Error('Invalid host-health temperature input'); }
 
 export function validateHostHealthInput(value: unknown): asserts value is HostHealthInput {
@@ -74,7 +87,7 @@ function decode(input: HostHealthInput, bytes: Buffer, now: number) {
   validateHostHealthInput(input);
   if (bytes.length > 16384 || !Number.isSafeInteger(now) || now < 946684800000) fail();
   const raw = utf8(bytes), value = strictJson(raw), match = topicPattern.exec(input.topic)!;
-  if (!object(value) || !exact(value, fields) || value.schema_version !== 1
+  if (!object(value) || !exact(value, Object.hasOwn(value, 'diagnostics') ? [...fields, 'diagnostics'] : fields) || value.schema_version !== 1
     || value.site_id !== match[1] || value.host_id !== match[2]
     || !validUuid(value.message_id) || !validUuid(value.boot_id)
     || !Number.isSafeInteger(value.sequence) || Number(value.sequence) < 1
@@ -91,6 +104,18 @@ function decode(input: HostHealthInput, bytes: Buffer, now: number) {
     if (number < lower || number > upper || ((key.endsWith('_bytes') || key === 'blocked_tasks') && !Number.isSafeInteger(number))) fail();
   }
   if (!Object.hasOwn(value.metrics, 'cpu_temperature_c')) fail(); // Missing cannot become zero or a cached reading.
+  // Optional source-masked RSS diagnostic. Keep it in the exact raw archive;
+  // it is not a temperature metric and must not change the processed output.
+  if (Object.hasOwn(value, 'diagnostics')) {
+    const diagnostic = value.diagnostics;
+    if (!object(diagnostic) || !exact(diagnostic, ['memory_top_process'])) fail();
+    const process = diagnostic.memory_top_process;
+    if (!object(process) || !exact(process, Object.hasOwn(process, 'path_masked')
+      ? ['name_masked', 'rss_bytes', 'path_masked'] : ['name_masked', 'rss_bytes'])
+      || !maskedProcessName(process.name_masked)
+      || (Object.hasOwn(process, 'path_masked') && !maskedProcessPath(process.path_masked))
+      || !Number.isSafeInteger(process.rss_bytes) || Number(process.rss_bytes) < 0) fail();
+  }
   if (!object(value.conditions) || !exact(value.conditions, conditions)) fail();
   for (const condition of Object.values(value.conditions)) {
     if (!object(condition) || !exact(condition, ['state', 'severity', 'incident_id', 'detail_code'])

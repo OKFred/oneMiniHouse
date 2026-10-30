@@ -4,9 +4,11 @@ from pathlib import Path
 import tempfile
 import unittest
 import uuid
+from contextlib import nullcontext
 from unittest.mock import Mock, patch
 
-from health_core import ActionLedger, Decisions, MIB, Sampler, validate_metrics
+from health_core import (ActionLedger, Decisions, MIB, Sampler, mask_process_name, mask_process_path,
+                         masked_process_name, masked_process_path, memory_top_process, validate_diagnostics, validate_metrics)
 from agent import Publisher, RamQueue, Worker, action_worker, envelope, inspect_proxy, restart_proxy
 
 BOOT = '11111111-1111-4111-8111-111111111111'
@@ -118,6 +120,180 @@ class SamplerTest(unittest.TestCase):
         self.assertEqual(sampler.sample(NOW)['metrics']['proxy_working_set_bytes'], 600 * MIB)
         (cg / 'memory.stat').write_text('total_inactive_file ' + str(800 * MIB) + '\ntotal_rss 0\n')
         self.assertNotIn('proxy_working_set_bytes', sampler.sample(NOW)['metrics'])
+
+    def test_default_resource_tick_does_not_scan_processes(self):
+        sampler = Sampler(self.root)
+        with patch('health_core.memory_top_process', return_value={'name_masked': 'ex***', 'rss_bytes': 1024}) as collect:
+            self.assertNotIn('diagnostics', sampler.sample(NOW))
+            collect.assert_not_called()
+            self.assertEqual(sampler.sample(NOW, include_diagnostics=True)['diagnostics']['memory_top_process']['rss_bytes'], 1024)
+            collect.assert_called_once_with(self.root)
+
+
+class ProcessDiagnosticsTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def process(self, pid, name='example-worker', rss=123, vsize=999999):
+        directory = self.root / str(pid)
+        directory.mkdir()
+        (directory / 'status').write_text('Name:\t' + name + '\nVmSize:\t' + str(vsize) + ' kB\n'
+                                         + ('' if rss is None else 'VmRSS:\t' + str(rss) + ' kB\n'), encoding='utf-8')
+        (directory / 'stat').write_text(str(pid) + ' (' + name + ') S ' + '0 ' * 18 + '100\n')
+        return directory
+
+    def test_ranking_uses_rss_not_virtual_memory_and_masks_at_source(self):
+        self.process(10, 'huge-virtual', rss=10, vsize=9999999)
+        self.process(20, 'resident-worker', rss=1000, vsize=1001)
+        value = memory_top_process(self.root)
+        self.assertEqual(value, {'name_masked': 'residen*-worker', 'rss_bytes': 1000 * 1024})
+        self.assertNotIn('resident-worker', json.dumps(value))
+        self.assertNotIn('pid', value)
+
+    def test_tiny_names_and_sanitized_unsafe_names_follow_middle_mask_rule(self):
+        for index, (name, expected) in enumerate((('x', 'x'), ('xy', 'xy'), ('x/y_token', 'x_y_*oken'), ('温度进程', '_*__'))):
+            with self.subTest(name=name):
+                directory = self.process(index + 1, name, rss=index + 1)
+                self.assertEqual(memory_top_process(self.root)['name_masked'], expected)
+                (directory / 'status').unlink(); (directory / 'stat').unlink(); directory.rmdir()
+
+    def test_missing_rss_kernel_thread_is_skipped_and_vanished_process_is_ignored(self):
+        self.process(10, 'kernel-worker', rss=None)
+        self.process(20, 'example-resident', rss=25)
+        (self.root / '30').mkdir()  # Exited after directory enumeration.
+        self.assertEqual(memory_top_process(self.root), {'name_masked': 'example*resident', 'rss_bytes': 25 * 1024})
+
+    def test_middle_mask_preserves_remaining_text_with_at_most_one_hidden_character(self):
+        for name, expected in (('a', 'a'), ('ab', 'ab'), ('abc', 'a*c'), ('node', 'n*de'),
+                               ('nodejs', 'no*ejs'), ('daemon', 'da*mon'), ('example-worker', 'exampl*-worker')):
+            with self.subTest(name=name):
+                self.assertEqual(mask_process_name(name), expected)
+                self.assertEqual(len(expected), len(name))
+                self.assertLessEqual(expected.count('*'), 1)
+                self.assertTrue(masked_process_name(expected, legacy=False))
+        self.assertTrue(masked_process_name('no***'))  # Original wire contract.
+        self.assertFalse(masked_process_name('no***', legacy=False))
+
+    def test_executable_path_uses_only_winning_pid_exe_and_can_differ_from_comm(self):
+        self.process(10, 'example-service', rss=50)
+        self.process(20, 'secondary-worker', rss=10)
+        with patch('health_core.os.readlink', return_value='/usr/bin/node') as link:
+            value = memory_top_process(self.root)
+            self.assertEqual(value['path_masked'], '/usr/bin/n*de')
+            self.assertEqual(value['name_masked'], 'example*service')
+            link.assert_called_once_with(self.root / '10' / 'exe')
+            validate_diagnostics({'memory_top_process': value})
+
+    def test_invalid_deleted_or_unavailable_executable_path_falls_back_to_comm(self):
+        self.process(10, 'example-worker', rss=50)
+        for path in ('/usr/bin/node (deleted)', '/usr//bin/node', '/usr/../bin/node',
+                     '/usr/bin/', 'node', '/usr/private dir/node', '/usr/' + 'x' * 513):
+            with self.subTest(path=path[:25]), patch('health_core.os.readlink', return_value=path):
+                self.assertNotIn('path_masked', memory_top_process(self.root))
+        with patch('health_core.os.readlink', side_effect=PermissionError):
+            self.assertNotIn('path_masked', memory_top_process(self.root))
+
+    def test_pid_reuse_or_comm_change_during_executable_read_omits_diagnostics(self):
+        directory = self.process(10, 'example-worker', rss=50)
+        with patch('health_core.process_start', side_effect=['100', '100', '101']):
+            self.assertIsNone(memory_top_process(self.root))
+        def changed(_path):
+            (directory / 'status').write_text('Name:\tnew-worker\nVmRSS:\t50 kB\n')
+            return '/usr/bin/node'
+        with patch('health_core.os.readlink', side_effect=changed):
+            self.assertIsNone(memory_top_process(self.root))
+
+    def test_non_leaders_do_not_read_stat_or_executable(self):
+        import health_core
+        self.process(10, 'example-worker', rss=100)
+        self.process(20, 'secondary-worker', rss=10)
+        with os.scandir(self.root) as directory:
+            entries = sorted(directory, key=lambda entry: entry.name)
+        with patch('health_core.os.scandir', return_value=nullcontext(entries)), \
+             patch('health_core.process_start', wraps=health_core.process_start) as starts, \
+             patch('health_core.os.readlink', return_value='/usr/bin/node') as link:
+            self.assertEqual(memory_top_process(self.root)['rss_bytes'], 100 * 1024)
+            self.assertEqual([call.args[0] for call in starts.call_args_list], [self.root / '10'] * 4)
+            link.assert_called_once_with(self.root / '10' / 'exe')
+
+    def test_leader_ranking_uses_identity_bound_reread_not_preliminary_rss(self):
+        import health_core
+        self.process(10, 'example-worker', rss=100)
+        self.process(20, 'secondary-worker', rss=200)
+        with os.scandir(self.root) as directory:
+            entries = sorted(directory, key=lambda entry: entry.name)
+        original_read, seen = health_core.read_small, 0
+        def reread(path, maximum=65536):
+            nonlocal seen
+            if path == self.root / '20' / 'status':
+                seen += 1
+                if seen > 1:
+                    return 'Name:\tsecondary-worker\nVmRSS:\t50 kB\n'
+            return original_read(path, maximum)
+        with patch('health_core.os.scandir', return_value=nullcontext(entries)), \
+             patch('health_core.read_small', side_effect=reread):
+            value = memory_top_process(self.root)
+            self.assertEqual(value['rss_bytes'], 100 * 1024)
+            self.assertEqual(value['name_masked'], 'exampl*-worker')
+        self.assertEqual(seen, 2)
+
+    def test_winning_pid_identity_rechecked_after_executable_read(self):
+        self.process(10, 'example-worker', rss=50)
+        with patch('health_core.process_start', side_effect=['100', '100', '100', '101']):
+            self.assertIsNone(memory_top_process(self.root))
+
+    def test_masked_paths_reject_unmasked_or_injected_or_overlong_values(self):
+        for raw, expected in (('/usr/bin/node', '/usr/bin/n*de'), ('/x/ab', '/x/ab'),
+                              ('/opt/example-daemon', '/opt/exampl*-daemon')):
+            with self.subTest(raw=raw):
+                self.assertEqual(mask_process_path(raw), expected)
+                self.assertTrue(masked_process_path(expected))
+        for value in ('/usr/bin/node', '/usr/bin/no***', '/usr/bin/***', '/usr/bin/n****e',
+                      '/usr/bin/n**e/../a', '/usr//bin/n**e', 'usr/bin/n**e', '/usr/./n**e',
+                      '/usr/bin/n**e\n', '/usr/' + 'a' * 508 + '/n**e', None):
+            with self.subTest(value=str(value)[:30]):
+                self.assertFalse(masked_process_path(value))
+
+    def test_incomplete_scan_omits_diagnostics_instead_of_claiming_subset_top(self):
+        self.process(10, rss=1); self.process(20, rss=1000)
+        self.assertIsNone(memory_top_process(self.root, maximum_processes=1))
+        self.assertIsNone(memory_top_process(self.root, maximum_entries=1))
+        self.assertIsNone(memory_top_process(self.root, clock=Mock(side_effect=[0, 0.21])))
+        with patch('health_core.read_small', side_effect=PermissionError):
+            self.assertIsNone(memory_top_process(self.root))
+
+    def test_malformed_or_oversize_process_status_omits_all_diagnostics(self):
+        directory = self.process(10, rss=1)
+        for text in ('Name:\texample-worker\nVmRSS:\tinvalid kB\n', 'VmRSS:\t100 kB\n', 'x' * 8193):
+            with self.subTest(text=text[:25]):
+                (directory / 'status').write_text(text)
+                self.assertIsNone(memory_top_process(self.root))
+
+    def test_optional_wire_diagnostics_validated_and_legacy_wire_unchanged(self):
+        s = sample(500); conditions, _ = Decisions().update(s)
+        cfg = {'site_id': 'example-site', 'host_id': 'example-host'}
+        self.assertNotIn('diagnostics', envelope(cfg, s, conditions, 1, []))
+        s['diagnostics'] = {'memory_top_process': {'name_masked': 'ex***', 'rss_bytes': 1024}}
+        value = envelope(cfg, s, conditions, 2, [])
+        self.assertEqual(value['diagnostics'], s['diagnostics'])
+        validate_diagnostics(value['diagnostics'])
+        for bad in (None, {}, {'memory_top_process': {'name_masked': 'example-worker', 'rss_bytes': 1}},
+                    {'memory_top_process': {'name_masked': 'ex***', 'rss_bytes': True}},
+                    {'memory_top_process': {'name_masked': 'ex***', 'rss_bytes': -1}},
+                    {'memory_top_process': {'name_masked': 'ex***', 'rss_bytes': 0.5}},
+                    {'memory_top_process': {'name_masked': 'ex***', 'rss_bytes': 2**53}},
+                    {'memory_top_process': {'name_masked': 'ex***', 'rss_bytes': 1, 'pid': 123}},
+                    {'memory_top_process': {'name_masked': 'x\n***', 'rss_bytes': 1}},
+                    {'memory_top_process': {'name_masked': 'n**e', 'rss_bytes': 1, 'path_masked': '/usr/bin/node'}},
+                    {'memory_top_process': {'name_masked': 'n**e', 'rss_bytes': 1, 'path_masked': None}}):
+            with self.subTest(bad=bad):
+                s['diagnostics'] = bad
+                with self.assertRaises(ValueError):
+                    envelope(cfg, s, conditions, 3, [])
 
 
 class LedgerTest(unittest.TestCase):

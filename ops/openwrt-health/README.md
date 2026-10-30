@@ -5,6 +5,9 @@ Python 3.10+ 原生 procd 服务，两个实例分别负责本机采样和 MQTT 
 ## 采集与判定
 
 - `/proc/meminfo` 使用 MemAvailable，保留匿名内存、Slab、不可回收 Slab、Shmem、Dirty、Writeback；CPU iowait 使用相邻 `/proc/stat` 差分，排除重复统计的 guest 字段。第一轮/计数器倒退不造零值。
+- 每次发布（通常每 60 秒，条件/动作变化时提前）附带 RSS 最大进程的诊断快照，资源指标来自最近的 10 秒采样。读取 `/proc/<pid>/status` 的 `Name`、`VmRSS`，按实际驻留内存 RSS 排序，不使用虚拟地址空间；[Linux proc 文档](https://docs.kernel.org/filesystems/proc.html) 说明了该字段。名称长度至少 3 时，仅隐藏中间 1 个字符并保留其余前后缀，例如 `node` → `n*de`、`daemon` → `da*mon`；长度不超过 2 时没有可隐藏的中间部分，保留原样。名称仅含 ASCII 安全字符且最多 64 字符。
+- 仅对 RSS 第一的 PID 读取 `/proc/<pid>/exe` 链接，可选上报真实绝对可执行路径，目录保持、仅文件名按相同规则脱敏，例如 `/usr/bin/n*de`。路径最多 512 字符，不接受空段、`.`、`..`、空白或控制字符。权限不足、已删除的可执行文件或路径不受支持时省略路径，回退到进程名；不读取命令参数或环境变量。仅对初步 RSS 领先者在 `/proc/<pid>/stat` 启动时间前后校验中重读 status，使用这次确认的 RSS 再比较排名；普通非领先进程仅读一次 status，减少内核文件读取。最终第一名的 exe 读取前后再次校验启动时间并复核进程名，避免进程退出/重用后错误关联路径。
+- 进程扫描最多 4,096 个进程、8,192 个目录项，status 每次最多 8 KiB、stat 最多 4 KiB，并在循环中检查 200 毫秒预算。权限不足、格式异常、达到上限或预算即省略整个诊断，不将局部排名冒充全机第一；进程退出竞态、无 VmRSS 的内核线程可跳过。顺序读取不是全机原子快照，也不能仅凭 RSS 排名确定内存压力原因。此诊断不改变告警阈值或自动缓解条件。
 - 读取 load、procs_blocked、可选 PSI、配置指定的温度、root/data 容量。PSI 缺失时省略相关指标。容量/Docker helper 失败或超过 90 秒失去新鲜度，不能继续作为有效证据。
 - CPU 温度是 sysfs 毫摄氏度换算；`-50..150°C` 是输入合理性保护，`85°C/120秒` 是本站可调整前需审查的告警策略，不是厂家物理额定范围。[Linux thermal ABI](https://docs.kernel.org/driver-api/thermal/sysfs-api.html)
 - 可用内存 `<256 MiB/120秒` 警告，`<128 MiB/60秒` 严重；iowait `>=20%` 且阻塞任务 `>=3/120秒` 为 I/O 严重；容量 `>=90%/300秒` 警告。load 单独不判定故障原因。
@@ -22,7 +25,7 @@ Python 3.10+ 原生 procd 服务，两个实例分别负责本机采样和 MQTT 
 
 ## 消息和保存
 
-主题为 `iot/v1/<site_id>/<host_id>/host-health`，MQTT5、TLS公共CA校验、QoS1、非retained；专用账号只能发布这一精确主题，禁止订阅/跨主机发布。固定 wire 包含schema_version/message_id/site_id/host_id/boot_id/sequence/read_time_utc/uptime_seconds/metrics/四类conditions/actions；没有命令行、环境变量、SN、原始日志或密码。
+主题为 `iot/v1/<site_id>/<host_id>/host-health`，MQTT5、TLS公共CA校验、QoS1、非retained；专用账号只能发布这一精确主题，禁止订阅/跨主机发布。固定 wire 包含schema_version/message_id/site_id/host_id/boot_id/sequence/read_time_utc/uptime_seconds/metrics/四类conditions/actions；可选 `diagnostics.memory_top_process` 含 `name_masked`、整数 `rss_bytes` 和可选 `path_masked`。旧版无诊断、早期 `no***` 风格名称及中间隐藏 2–3 字符的报文仍可读取；新发布的名称及路径文件名最多隐藏中间 1 字符。没有命令行、环境变量、SN、原始日志或密码。升级应先让接收端及入库端兼容可选诊断，再更新发布端。
 
 `/tmp` 消息队列最多360条/6小时/2 MiB，重启丢失；只有成功PUBACK才删消息，失败保留消息ID和原文。Paho仅一个inflight、最多两个内部排队，避免网络阻塞无限占内存。成功PUBACK不代表远端消费或数据库提交；离线补报也不能证明当前资源恢复。
 

@@ -164,6 +164,63 @@ class ReceiverTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_payload(self.source, encode(value), self.now)
 
+    def test_optional_masked_process_diagnostics_persist_export_before_ack(self):
+        value = self.value()
+        value['diagnostics'] = {'memory_top_process': {'name_masked': 'ex***', 'rss_bytes': 123456789}}
+        def ack(mid, qos):
+            self.assertEqual(self.exported()['diagnostics'], value['diagnostics'])
+            self.assertEqual(self.exported()['payload_sha256'], hashlib.sha256(encode(value)).hexdigest())
+            self.acks.append((mid, qos))
+        self.client.ack = ack
+        self.send(value)
+        self.assertEqual(self.acks, [(12, 1)])
+        self.receiver.store.close(); self.receiver.store = Store(self.cfg, lambda: self.now)
+        self.receiver.store.export(self.source['id'])
+        self.assertEqual(self.exported()['diagnostics'], value['diagnostics'])
+
+    def test_middle_masked_name_and_optional_executable_path_export(self):
+        value = self.value()
+        value['diagnostics'] = {'memory_top_process': {'name_masked': 'examp***worker', 'rss_bytes': 123456789,
+                                                     'path_masked': '/usr/bin/n**e'}}
+        self.send(value)
+        self.assertEqual(self.exported()['diagnostics'], value['diagnostics'])
+        self.assertEqual(self.exported()['payload_sha256'], hashlib.sha256(encode(value)).hexdigest())
+        for index, name in enumerate(('a', 'ab', 'n**e', 'pyt***3', '***', 'no***')):
+            value = self.value(index + 2, self.now + index + 1)
+            value['diagnostics'] = {'memory_top_process': {'name_masked': name, 'rss_bytes': 0}}
+            validate_payload(self.source, encode(value), self.now)
+
+    def test_unmasked_or_invalid_executable_paths_rejected_without_replacing_latest(self):
+        self.send(self.value()); original = self.exported()
+        for path in (None, '', 'usr/bin/n**e', '/usr/bin/node', '/usr/bin/***', '/usr/bin/no***',
+                     '/usr/bin/n****e', '/usr//bin/n**e', '/usr/../bin/n**e', '/usr/bin/n**e\n',
+                     '/usr/.' + '/n**e', '/usr/' + 'x' * 508 + '/n**e'):
+            with self.subTest(path=str(path)[:30]):
+                value = self.value(2)
+                value['diagnostics'] = {'memory_top_process': {'name_masked': 'n**e', 'rss_bytes': 1, 'path_masked': path}}
+                with self.assertRaises(ValueError):
+                    validate_payload(self.source, encode(value), self.now)
+                self.send(value)
+                self.assertEqual(self.exported(), original)
+
+    def test_malformed_or_unmasked_diagnostics_rejected_without_replacing_latest(self):
+        self.send(self.value()); original = self.exported()
+        for bad in (None, {}, {'other': 1}, {'memory_top_process': None},
+                    {'memory_top_process': {'name_masked': 'example-worker', 'rss_bytes': 1}},
+                    {'memory_top_process': {'name_masked': 'abc***', 'rss_bytes': 1}},
+                    {'memory_top_process': {'name_masked': 'ex***\n', 'rss_bytes': 1}},
+                    {'memory_top_process': {'name_masked': 'ex***', 'rss_bytes': True}},
+                    {'memory_top_process': {'name_masked': 'ex***', 'rss_bytes': 1.0}},
+                    {'memory_top_process': {'name_masked': 'ex***', 'rss_bytes': -1}},
+                    {'memory_top_process': {'name_masked': 'ex***', 'rss_bytes': 2**53}},
+                    {'memory_top_process': {'name_masked': 'ex***', 'rss_bytes': 1, 'pid': 123}}):
+            with self.subTest(bad=bad):
+                value = self.value(2); value['diagnostics'] = bad
+                with self.assertRaises(ValueError):
+                    validate_payload(self.source, encode(value), self.now)
+                self.send(value)
+                self.assertEqual(self.exported(), original)
+
     def test_transient_actions_survive_next_snapshot_and_restart(self):
         value = self.value(); value["actions"] = [self.action()]; self.send(value)
         self.now += 60; self.send(self.value(2))
