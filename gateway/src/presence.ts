@@ -55,4 +55,17 @@ export class PresenceSession {
     this.failures.set(deviceId, count);
     return count < 3 ? null : this.message('observation', false, 'read_failed', deviceId);
   }
+  readObservations(device: { id: string; driver: string; gatewayDeviceId?: unknown },
+    reading?: { utc: string; source: { observation_kind?: unknown } }) {
+    const xiaomi = device.driver === 'xiaomi-gateway-v3-temperature';
+    const cached = xiaomi || reading?.source.observation_kind === 'gateway_cached_state';
+    const sensor = this.observation(device.id, cached ? null : !!reading, reading?.utc);
+    const observations = sensor ? [sensor] : [];
+    // A completed authenticated RPC proves the hub is readable, not its cached Zigbee sensor.
+    if (xiaomi && typeof device.gatewayDeviceId === 'number' && Number.isSafeInteger(device.gatewayDeviceId)
+      && device.gatewayDeviceId >= 1 && device.gatewayDeviceId <= 0xfffffffe) {
+      observations.push(this.observation(`xiaomi-gateway-${device.gatewayDeviceId}`, reading ? true : null, reading?.utc)!);
+    }
+    return observations;
+  }
 }

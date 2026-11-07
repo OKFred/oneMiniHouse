@@ -27,3 +27,21 @@ test('cached gateway state is unknown, three direct failures are bounded and a n
   assert.equal(p.observation('meter', false), null);
   assert.equal(p.message('heartbeat', true, 'heartbeat').online, true);
 });
+
+test('Xiaomi hub follows completed reads, cached sensors stay unknown, and shared hub identity is stable', () => {
+  const p = new PresenceSession(identity); p.begin();
+  const sensor = { id: 'room-sensor', driver: 'xiaomi-gateway-v3-temperature', gatewayDeviceId: 12345678 };
+  const reading = { utc: '2026-11-01T00:00:00.000Z', source: { observation_kind: 'gateway_cached_state' } };
+  const states = p.readObservations(sensor, reading);
+  assert.deepEqual(states.map(value => [value.device_id, value.online, value.reason]), [
+    ['room-sensor', null, 'upstream_unknown'], ['xiaomi-gateway-12345678', true, 'read_ok'],
+  ]);
+  assert.equal(states[1].source_time_utc, reading.utc);
+  assert.equal(p.readObservations({ ...sensor, id: 'second-sensor' }, reading)[1].device_id, states[1].device_id);
+  assert.equal(p.readObservations(sensor, { ...reading, source: {} })[0].online, null);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    assert.ok(p.readObservations(sensor).every(value => value.online === null && value.reason === 'upstream_unknown'));
+  }
+  assert.ok(!p.readObservations({ id: 'ordinary', driver: 'chint-ddsu666-rtu-tcp' }, { utc: reading.utc, source: {} })
+    .some(value => value.device_id.startsWith('xiaomi-gateway-')));
+});

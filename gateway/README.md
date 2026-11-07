@@ -4,6 +4,8 @@
 
 断线时仅通过 MQTT.js 公开 API 清除未确认的在线状态包，重连不补发旧心跳；遥测 SDK 在途项与持久队列保持原有行为。
 
+小米 `lumi.gateway.v3` 完整读取包含现有认证 miIO RPC。成功时另在 `<topicPrefix>/devices/xiaomi-gateway-<gatewayDeviceId>/status` 报告物理 hub 可读；多个传感器复用同一 hub ID。Zigbee 温湿度仍是缓存状态，保持 unknown。读取失败时 hub 也仅报告 unknown；不新增 RPC、不据传感器缓存错误判 hub 离线。精确状态权限需包含这个派生主题，hub 的 parent 为隐藏逻辑采集进程，缓存传感器的 parent 为该 hub。
+
 实际设备读取结果发布到 `<topicPrefix>/devices/<deviceId>/status`：直接读取成功表示可读，连续三次失败表示不可读，米家网关缓存无论读取成功或失败都保持未知。状态消息不进入遥测 outbox，断网后只发送新观察；接收端按网关依赖将上游失联期间的子设备标成未知。
 
 Node.js 24 / TypeScript / pnpm 采集服务，支持 YM-S1-BES 蓝牙插座、DDSU666 Modbus 电表、B-RS-L30 光照、米家 Zigbee 温湿度及 Linux 主机温度。MQTT 5 / TLS / QoS 1 上报，SQLite 保存断网队列。只实现已确认的读取命令，不实现开关、清零或写参数。

@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { decodeMiio, encodeMiio, readXiaomi, temperatureMetrics } from '../src/xiaomi.ts';
 import { validateConfig, type XiaomiDeviceConfig } from '../src/config.ts';
+import { PresenceSession } from '../src/presence.ts';
 
 const token = Buffer.from('00112233445566778899aabbccddeeff', 'hex'); // Synthetic test key only.
 const did = 12345678, sid = 'lumi.00000000000001';
@@ -82,6 +83,11 @@ test('UDP round reads only configured sensor, ignores stale IDs and records gate
     assert.deepEqual(row.metrics, { temperature_c: 29.25, humidity_pct: 84.37, battery_pct: 60 });
     assert.equal(row.source.observation_kind, 'gateway_cached_state'); assert.equal(row.source.sensor_sample_time_known, false);
     assert.equal(row.utc, row.source.read_time_utc);
+    const presence = new PresenceSession({ site_id: 'example-site', gateway_id: 'example-collector', device_id: 'example-collector', reporter_id: 'example-reader' });
+    presence.begin();
+    const states = presence.readObservations(device, row);
+    assert.deepEqual(states.map(value => [value.device_id, value.online]), [[device.id, null], [`xiaomi-gateway-${did}`, true]]);
+    assert.equal(states[1].reason, 'read_ok'); assert.equal(states[1].source_time_utc, row.utc);
     assert.deepEqual(requests.map(({ method, params }) => ({ method, params })), [
       { method: 'miIO.info', params: [] }, { method: 'get_device_prop', params: ['lumi.0', 'device_list'] },
       { method: 'get_device_prop_exp', params: [[sid, 'temperature', 'humidity']] }, { method: 'get_battery', params: [sid] },

@@ -76,10 +76,10 @@ async function collect(device: DeviceConfig) {
     deviceHealth[device.id] = 'error';
     const state = { ...envelope(device.id), collection_id: collectionId, captured_at: new Date().toISOString(), quality: 'error', error };
     box.state(device.id, state.message_id, `${base}/state`, JSON.stringify(state));
-    const observation = transport.presence.observation(device.id, device.driver === 'xiaomi-gateway-v3-temperature' ? null : false);
-    if (observation && transport.connected) {
-      try { await transport.publish(`${base}/status`, encodePresence(observation), true); }
-      catch { /* A failed live observation is never replayed from the telemetry outbox. */ }
+    for (const observation of transport.presence.readObservations(device)) {
+      if (!transport.connected) continue;
+      try { await transport.publish(`${config.mqtt.topicPrefix}/devices/${observation.device_id}/status`, encodePresence(observation), true); }
+      catch { /* Live observations are never replayed from the telemetry outbox. */ }
     }
     log('sample_failed', { device_id: device.id, error });
   }
@@ -91,11 +91,10 @@ async function collect(device: DeviceConfig) {
       quality: 'ok', metrics: row.metrics, source: row.source };
     box.save({ id: sample.message_id, topic: `${base}/telemetry`, payload: JSON.stringify(sample), captured_ms: Date.parse(row.utc) }, device.id, `${base}/state`);
     deviceHealth[device.id] = 'ok';
-    const cached = row.source.observation_kind === 'gateway_cached_state';
-    const observation = transport.presence.observation(device.id, cached ? null : true, row.utc);
-    if (observation && transport.connected) {
-      try { await transport.publish(`${base}/status`, encodePresence(observation), true); }
-      catch { /* The next direct read supplies a new observation. */ }
+    for (const observation of transport.presence.readObservations(device, row)) {
+      if (!transport.connected) continue;
+      try { await transport.publish(`${config.mqtt.topicPrefix}/devices/${observation.device_id}/status`, encodePresence(observation), true); }
+      catch { /* Live observations are never replayed from the telemetry outbox. */ }
     }
     log('sample_saved', { ...sample, ...box.stats() });
   }
