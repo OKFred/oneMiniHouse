@@ -10,7 +10,8 @@ All fields below are required. Use a new `session_id` UUID for **every successfu
 MQTT connection**, including a reconnect in the same process. `boot_id` identifies
 the reporting process/MCU boot, not a proxy child's boot. A new event uses a new
 UUID; a QoS 1 retransmission retains its bytes and ID. `reporter_id` is the
-configured publishing MQTT client ID.
+configured logical reporter identity, usually the publishing MQTT client ID. The
+phone uses its opaque health device ID while retaining its legacy MQTT client ID.
 
 ```json
 {
