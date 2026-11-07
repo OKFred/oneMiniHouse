@@ -73,6 +73,12 @@ def server_label(definition):
     branches = optimizer.split_top_level(definition.strip().removesuffix(';'), 'UNION ALL')
     if len(branches) != 3:
         raise ValueError('Expected the current three server source branches')
+    for branch in branches:
+        raw_key = optimizer.replace_code(branch, r'\bmetric\.key\s+AS\s+sensor_id\b', '__nonnull_sensor_key__') != branch
+        literal_key = re.search(LITERAL + r'\s+(?P<alias>AS\s+sensor_id)\s*,', branch, re.I)
+        if not raw_key and not (literal_key and any(start <= literal_key.start('alias') and literal_key.end('alias') <= end
+                                                   for start, end in optimizer.code_ranges(branch))):
+            raise ValueError('Unsupported nullable server sensor identity')
     expanded, count, _ = optimizer.source_branches(definition)
     first_name = re.search(r'\bt\.device_id\s*,(.*?)\bAS\s+device_name\b', branches[0], re.I | re.S)
     if not first_name or not re.fullmatch(r'\s*CASE\s+t\.device_id(?:\s+WHEN\s+' + LITERAL + r'\s+THEN\s+' + LITERAL + r')+\s+ELSE\s+NULL::text\s+END\s*', first_name.group(1), re.I | re.S):
@@ -147,7 +153,9 @@ def dashboard_template(dashboard):
     return metric.group(1), category, all_value.group(1) if all_value else "'all'"
 
 
-def render(snapshot, dashboard, interval_seconds=None, start=None, end=None):
+def render(snapshot, dashboard, interval_seconds=None, start=None, end=None, deterministic_default_collation=None):
+    if deterministic_default_collation is not True:
+        raise ValueError('Verify deterministic default collation before using intermediate C grouping')
     delimiter, category, all_value = dashboard_template(dashboard)
     views = {view['name']: view for view in snapshot['views']}
     labels = []
@@ -155,6 +163,9 @@ def render(snapshot, dashboard, interval_seconds=None, start=None, end=None):
         view = views[name]
         if 'security_barrier=true' not in (view.get('options') or []):
             raise ValueError('Refusing a view snapshot without the existing security barrier')
+        if any(re.search(r'\bCOLLATE\b', view['definition'][start:end], re.I)
+               for start, end in optimizer.code_ranges(view['definition'])):
+            raise ValueError('Unsupported explicit source collation')
         labels.append(server_label(view['definition']) if name == VIEWS[0] else label(view['definition']))
     if interval_seconds is not None and (type(interval_seconds) is not int or interval_seconds <= 0):
         raise ValueError('Interval seconds must be a positive integer')
@@ -165,15 +176,25 @@ def render(snapshot, dashboard, interval_seconds=None, start=None, end=None):
             raise ValueError('Expected a finite increasing UTC benchmark window')
         time_filter = "read_time_utc BETWEEN TIMESTAMPTZ '" + start.isoformat() + "' AND TIMESTAMPTZ '" + end.isoformat() + "'"
         category = category.replace('${temperature_category:sqlstring}', all_value)
-    aggregated, labeled = [], []
+    aggregated, labeled, lookup = [], [], []
     for index, (name, sensor_name) in enumerate(zip(VIEWS, labels)):
         alias = 'temperature_buckets_' + str(index)
+        identities = ('device_id COLLATE "C" AS device_id,device_name COLLATE "C" AS device_name,sensor_id COLLATE "C" AS sensor_id'
+                      if index == 0 else 'device_id,device_name,sensor_id')
         aggregated.append(alias + ' AS MATERIALIZED (\nSELECT date_bin(make_interval(secs => ' + stride + "),read_time_utc,TIMESTAMPTZ '1970-01-01T00:00:00Z') AS bucket,\n"
-            + 'device_id,device_name,sensor_id,sum(temperature_c) AS temperature_sum,count(temperature_c) AS temperature_count\n'
+            + identities + ',sum(temperature_c) AS temperature_sum,count(temperature_c) AS temperature_count\n'
             + 'FROM iot.' + name + '\nWHERE ' + time_filter + '\nGROUP BY 1,2,3,4\n)')
-        labeled.append('SELECT bucket,device_name || ' + delimiter + ' || (' + sensor_name + ') AS metric,temperature_sum,temperature_count\nFROM ' + alias + '\nWHERE ' + category)
+        metric = 'device_name || ' + delimiter + ' || (' + sensor_name + ')'
+        if index == 0:
+            # DISTINCT must precede CASE evaluation; labels belong to source identities, not every time bucket.
+            lookup = ['temperature_label_keys_0 AS MATERIALIZED (\nSELECT DISTINCT device_id,device_name,sensor_id FROM ' + alias + '\n)',
+                      'temperature_label_lookup_0 AS MATERIALIZED (\nSELECT device_id,device_name,sensor_id,(' + metric + ') COLLATE "default" AS metric\nFROM temperature_label_keys_0\n)']
+            labeled.append('SELECT bucket,l.metric,temperature_sum,temperature_count\nFROM ' + alias
+                           + ' b JOIN temperature_label_lookup_0 l USING(device_id,sensor_id)\nWHERE b.device_name IS NOT DISTINCT FROM l.device_name AND (' + category + ')')
+        else:
+            labeled.append('SELECT bucket,' + metric + ' AS metric,temperature_sum,temperature_count\nFROM ' + alias + '\nWHERE ' + category)
     output_time = 'bucket AS "time"' if interval_seconds is not None else '$__timeGroupAlias(bucket,$__interval,NULL)'
-    return 'WITH\n' + ',\n'.join(aggregated) + ',\ntemperature_labels AS (\n' + '\nUNION ALL\n'.join(labeled) + '\n)\n' + \
+    return 'WITH\n' + ',\n'.join(aggregated + lookup) + ',\ntemperature_labels AS (\n' + '\nUNION ALL\n'.join(labeled) + '\n)\n' + \
         'SELECT ' + output_time + ',metric,sum(temperature_sum)/NULLIF(sum(temperature_count),0)::double precision AS value\nFROM temperature_labels\nGROUP BY 1,2\nORDER BY 1,2;\n'
 
 
@@ -184,22 +205,30 @@ def main():
     parser.add_argument('--candidate', type=Path, required=True)
     parser.add_argument('--benchmark', type=Path)
     parser.add_argument('--interval-seconds', type=int, default=600)
+    parser.add_argument('--collation-evidence', type=Path, required=True,
+                        help='Private read-only catalog evidence with deterministic_default_collation=true for the target database')
     args = parser.parse_args()
     local = Path(__file__).resolve().parents[2] / '.local'
     if any(not output.resolve().is_relative_to(local) for output in [args.candidate, args.benchmark] if output):
         parser.error('Private query candidates must be inside this checkout .local directory')
     snapshot = json.loads(args.snapshot.read_text(encoding='utf-8-sig'))
     dashboard = json.loads(args.dashboard.read_text(encoding='utf-8-sig'))
-    outputs = [(args.candidate, render(snapshot, dashboard))]
+    evidence = json.loads(args.collation_evidence.read_text(encoding='utf-8-sig'))
+    deterministic = isinstance(evidence, dict) and evidence.get('deterministic_default_collation') is True
+    if not deterministic:
+        parser.error('Expected verified deterministic default collation in the private evidence')
+    outputs = [(args.candidate, render(snapshot, dashboard, deterministic_default_collation=deterministic))]
     if args.benchmark:
         end = datetime(2026, 11, 7, 20, 16, 51, tzinfo=timezone.utc)
-        outputs.append((args.benchmark, render(snapshot, dashboard, args.interval_seconds, end - timedelta(days=7), end)))
+        outputs.append((args.benchmark, render(snapshot, dashboard, args.interval_seconds, end - timedelta(days=7), end,
+                                              deterministic_default_collation=deterministic)))
     for path, query in outputs:
         with path.open('x', encoding='utf-8', newline='\n') as output:
             output.write(query)
     print(json.dumps({'candidateSha256': hashlib.sha256(outputs[0][1].encode()).hexdigest(),
                       'snapshotSha256': hashlib.sha256(args.snapshot.read_bytes()).hexdigest(),
-                      'readOnly': True, 'safeViews': len(VIEWS), 'actualPostgresVerificationRequired': True}))
+                      'readOnly': True, 'safeViews': len(VIEWS), 'deterministicDefaultCollationVerified': True,
+                      'actualPostgresVerificationRequired': True}))
 
 
 if __name__ == '__main__':
