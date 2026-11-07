@@ -4,6 +4,8 @@ import { receive } from './intake.ts';
 import type { Queue } from './queue.ts';
 import { hostHealthProcessor, hostHealthRaw } from './host-health.ts';
 import type { BusinessHealth } from './business-health.ts';
+import { randomUUID } from 'node:crypto';
+import { receivePresence } from './presence.ts';
 
 /** Enforce the connection's exact topic assignment even if an old persistent
  * session delivers messages from filters no longer configured for this client.
@@ -18,7 +20,18 @@ export function receiveConnectionMessage(queue: Queue, config: Config, plan: Mqt
   if (!allowed && plan.hostHealthInput) {
     queue.reject(packet.topic, Buffer.from('[invalid host health redacted]'), 'UNEXPECTED_MQTT_TOPIC'); return 'rejected' as const;
   }
+  if(!allowed&&plan.presenceDevices){
+    const device=plan.presenceDevices[0];
+    queue.reject(device.topic,Buffer.from('[unexpected presence topic]'),'UNEXPECTED_MQTT_TOPIC',{sourceKind:'mqtt_presence',siteId:device.siteId});return 'rejected' as const;
+  }
   if (!allowed) { queue.reject(packet.topic, bytes, 'UNEXPECTED_MQTT_TOPIC'); return 'rejected' as const; }
+  if (plan.presenceDevices) {
+    const device=plan.presenceDevices.find(value=>value.topic===packet.topic);
+    if(!device||!plan.presenceSessionId||packet.qos!==1){queue.reject(packet.topic,bytes,'INVALID_PRESENCE_TRANSPORT',device?{sourceKind:'mqtt_presence',siteId:device.siteId}:undefined);return 'rejected' as const;}
+    return receivePresence(queue,device,bytes,{observerClientId:plan.clientId,observerSessionId:plan.presenceSessionId,
+      observedAt:Date.now(),retained:packet.retain,qos:packet.qos,duplicate:packet.dup,available:plan.presenceAvailable===true,
+      ...(plan.presenceCoverageStartAt===undefined?{}:{observerCoverageStartAt:plan.presenceCoverageStartAt})});
+  }
   if (plan.hostHealthInput && (packet.qos !== 1 || packet.retain)) {
     queue.reject(packet.topic, Buffer.from('[invalid host health redacted]'), 'INVALID_HOST_HEALTH_TRANSPORT');
     return 'rejected' as const;
@@ -30,6 +43,7 @@ export function receiveConnectionMessage(queue: Queue, config: Config, plan: Mqt
  * a standard telemetry envelope or counted as an individual CPU core sample. */
 export function observeConnectionMessage(health: Pick<BusinessHealth, 'observe' | 'observeAccepted'>, result: 'saved' | 'duplicate' | 'rejected', packet: IPublishPacket, config: Config, plan: MqttConnectionPlan): void {
   const bytes = Buffer.from(packet.payload);
+  if(plan.presenceDevices)return;
   if (plan.hostHealthInput) {
     if (result === 'saved') health.observe(hostHealthProcessor.process(hostHealthRaw(plan.hostHealthInput, bytes)));
   } else health.observeAccepted(result, packet.topic, bytes, config.collectdTemperatures);
@@ -45,11 +59,14 @@ export interface MqttConnectionHealth {
 interface Connection {
   client: MqttClient; health: MqttConnectionHealth; generation: number; attempt: number;
   retryDelay: number; cancelRetry?: Cancel; cancelControl?: Cancel;
+  plan: MqttConnectionPlan; coverageAt: number; coverageSequence: number;
 }
 interface Dependencies {
   connect?: (url: string, options: IClientOptions) => MqttClient;
   schedule?: Schedule;
   readSecret?: (path: string) => string;
+  now?: () => number;
+  coverage?: (plan:MqttConnectionPlan,event:'coverage_start'|'coverage_heartbeat'|'coverage_end',sequence:number,now:number)=>void;
 }
 const schedule: Schedule = (callback, milliseconds) => {
   const timer = setTimeout(callback, milliseconds);
@@ -69,12 +86,15 @@ const code = (error: unknown) => {
 export class MqttConnections {
   private readonly connections: Connection[] = [];
   private stopped = false;
+  private readonly now:()=>number;
+  private readonly coverage:NonNullable<Dependencies['coverage']>;
   constructor(
     config: Config, password: string,
     intake: (packet: IPublishPacket, plan: MqttConnectionPlan) => void,
     log: Log, dependencies: Dependencies = {},
   ) {
     const connect = dependencies.connect ?? mqtt.connect;
+    this.now=dependencies.now??Date.now;this.coverage=dependencies.coverage??(()=>{});
     const later = dependencies.schedule ?? schedule;
     const credentials = mqttConnectionPlans(config).map(plan => ({ plan,
       username: plan.hostHealthInput?.username ?? config.mqtt.username,
@@ -82,13 +102,13 @@ export class MqttConnections {
     }));
     for (const { plan, username, password: connectionPassword } of credentials) {
       const client = connect(config.mqtt.url, {
-        protocolVersion: 5, clean: false, clientId: plan.clientId,
+        protocolVersion: 5, clean: !!plan.presenceDevices, clientId: plan.clientId,
         username, password: connectionPassword, rejectUnauthorized: true,
         reconnectPeriod: 5000, reconnectOnConnackError: true, connectTimeout: 15000, keepalive: 30, resubscribe: false,
-        properties: { sessionExpiryInterval: config.mqtt.sessionExpirySeconds, receiveMaximum: 10, maximumPacketSize: plan.hostHealthInput ? 16384 : 1048576 },
+        properties: { sessionExpiryInterval: plan.presenceDevices?0:config.mqtt.sessionExpirySeconds, receiveMaximum: 10, maximumPacketSize: plan.hostHealthInput||plan.presenceDevices ? 16384 : 1048576 },
       });
       const connection: Connection = {
-        client, generation: 0, attempt: 0, retryDelay: 30000,
+        client, generation: 0, attempt: 0, retryDelay: 30000,plan,coverageAt:0,coverageSequence:0,
         health: { client_id: plan.clientId, connected: false, subscribed: false, intake_paused: false, subscription_count: plan.subscriptions.length, error: 'NOT_CONNECTED' },
       };
       this.connections.push(connection);
@@ -113,6 +133,7 @@ export class MqttConnections {
         connection.cancelControl?.(); connection.cancelControl = undefined;
       };
       const unavailable = () => {
+        this.recordCoverage(connection,'coverage_end');
         connection.generation++;
         connection.health.connected = false;
         connection.health.subscribed = false;
@@ -140,7 +161,7 @@ export class MqttConnections {
           if (!current()) return;
           if (!plan.subscriptions.length) { succeeded(); return; }
           try {
-            client.subscribe(plan.subscriptions, { qos: 1, rh: 2, ...(plan.hostHealthInput ? { rap: true } : {}) }, (error, granted) => {
+            client.subscribe(plan.subscriptions, { qos: 1, rh: plan.presenceDevices?0:2, ...(plan.hostHealthInput ? { rap: true } : {}) }, (error, granted) => {
               if (!current()) return;
               const exact = granted?.length === plan.subscriptions.length && plan.subscriptions.every(topic => granted.some(grant => grant.topic === topic && grant.qos === 1));
               if (error || !exact) { failed(error ? code(error) : 'SUBACK_REJECTED'); return; }
@@ -150,6 +171,7 @@ export class MqttConnections {
         };
         const succeeded = () => {
           connection.cancelControl?.(); connection.cancelControl = undefined;
+          if(!this.recordCoverage(connection,'coverage_start'))return;
           connection.health.subscribed = true; connection.health.error = null;
           connection.retryDelay = 30000;
           emit('mqtt_subscribed', { count: plan.subscriptions.length });
@@ -172,12 +194,29 @@ export class MqttConnections {
       client.on('offline', () => { unavailable(); emit('mqtt_offline'); });
       client.on('close', unavailable);
       client.on('connect', packet => {
+        if(plan.presenceDevices){plan.presenceSessionId=randomUUID();plan.presenceAvailable=false;delete plan.presenceCoverageStartAt;connection.coverageSequence=0;}
         connection.generation++;
         connection.health.connected = true; connection.health.subscribed = false;
         emit('mqtt_connected', { session_present: packet.sessionPresent, server_session_expiry: packet.properties?.sessionExpiryInterval });
         synchronize();
       });
     }
+  }
+  private recordCoverage(connection:Connection,event:'coverage_start'|'coverage_heartbeat'|'coverage_end',now=this.now()):boolean {
+    if(!connection.plan.presenceDevices||event==='coverage_end'&&!connection.plan.presenceAvailable)return true;
+    try{
+      this.coverage(connection.plan,event,++connection.coverageSequence,now);
+      if(event==='coverage_start'&&connection.plan.presenceCoverageStartAt===undefined)connection.plan.presenceCoverageStartAt=now;
+      if(event==='coverage_end')delete connection.plan.presenceCoverageStartAt;
+      connection.coverageAt=now;connection.plan.presenceAvailable=event!=='coverage_end';return true;
+    }catch{
+      connection.plan.presenceAvailable=false;delete connection.plan.presenceCoverageStartAt;connection.health.intake_paused=true;connection.health.error='PRESENCE_COVERAGE_STORAGE_FAILED';
+      connection.client.stream?.destroy();return false;
+    }
+  }
+  pulsePresenceCoverage(now=this.now()) {
+    for(const connection of this.connections)if(connection.plan.presenceDevices&&connection.client.connected&&connection.health.subscribed
+      &&connection.plan.presenceAvailable&&now-connection.coverageAt>=30000)this.recordCoverage(connection,'coverage_heartbeat',now);
   }
   snapshot() {
     const connections = this.connections.map(({ client, health }) => ({ ...health, connected: client.connected && !this.stopped }));
@@ -191,6 +230,7 @@ export class MqttConnections {
   async stop() {
     this.stopped = true;
     for (const connection of this.connections) {
+      this.recordCoverage(connection,'coverage_end');
       connection.generation++;
       connection.cancelRetry?.(); connection.cancelControl?.();
       connection.health.subscribed = false;

@@ -31,6 +31,25 @@ const request = (records: RawRecord[], token = TOKEN) => new Request('https://ex
 const idFor = (n: number) => `00000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
 const DAY_MS = 86400000;
 
+test('legacy exact presence topics retain their raw bytes and strict site scope under the 48-hour mirror policy',async()=>{
+  const {db,env}=setup();
+  try{
+    env.D1_RETENTION_DAYS='2';
+    const record={...raw(),source_kind:'mqtt_presence',topic:'autojs6/v2/devices/example-mobile/presence'};
+    assert.doesNotThrow(()=>validateRaw(record,'example-home'));
+    assert.throws(()=>validateRaw({...record,source_site_id:null},'example-home'));
+    assert.throws(()=>validateRaw({...record,source_site_id:'other-site'},'example-home'));
+    assert.throws(()=>validateRaw({...record,source_kind:'mqtt'},'example-home'));
+    const observer={...record,source_kind:'presence_observer',topic:'iot/v1/example-home/_presence-observer/example-reader'};
+    assert.doesNotThrow(()=>validateRaw(observer,'example-home'));
+    assert.throws(()=>validateRaw({...observer,topic:'iot/v1/other-site/_presence-observer/example-reader'},'example-home'));
+    assert.equal((await worker.fetch(request([record]),env)).status,200);
+    const stored=db.prepare('SELECT topic,raw_data,source_kind,expire_time_utc FROM raw_message').get()!;
+    assert.equal(stored.topic,record.topic);assert.equal(stored.raw_data,record.raw_data);assert.equal(stored.source_kind,'mqtt_presence');
+    assert.equal(stored.expire_time_utc,record.store_time_utc+2*DAY_MS);
+  }finally{db.close();}
+});
+
 test('auth fails before persistence; original UTF8 survives idempotent replay', async () => {
   const {db,env} = setup();
   try {

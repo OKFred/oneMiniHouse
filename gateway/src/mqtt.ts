@@ -1,6 +1,7 @@
 import mqtt, { type MqttClient } from 'mqtt';
 import { readFileSync } from 'node:fs';
 import type { Config } from './config.ts';
+import { PresenceSession, encodePresence, discardPresenceOnDisconnect } from './presence.ts';
 
 export function successfulPuback(packet: unknown): boolean {
   const ack = packet as { cmd?: string; reasonCode?: number } | undefined;
@@ -31,8 +32,14 @@ export function publishQos1(client: MqttClient, topic: string, payload: string, 
 }
 export class MqttTransport {
   readonly client: MqttClient;
-  constructor(config: Config, offline: string) {
+  readonly presence: PresenceSession;
+  constructor(config: Config) {
     const m = config.mqtt;
+    this.presence = new PresenceSession({ site_id: config.siteId, gateway_id: config.gatewayId,
+      device_id: config.gatewayId, reporter_id: m.clientId });
+    const will = () => ({ topic: `${m.topicPrefix}/status`,
+      payload: Buffer.from(encodePresence({ ...this.presence.begin(), quality: 'offline', captured_at: null })),
+      qos: 1 as const, retain: true });
     const password = readFileSync(m.passwordFile, 'utf8').replace(/\r?\n$/, '');
     if (!password) throw new Error('MQTT secret is empty');
     this.client = mqtt.connect(m.url, {
@@ -40,10 +47,12 @@ export class MqttTransport {
       rejectUnauthorized: true, ...(m.caFile ? { ca: readFileSync(m.caFile) } : {}),
       clean: true, reconnectPeriod: 5000, connectTimeout: 15000, keepalive: 30,
       queueQoSZero: false, resubscribe: false,
-      will: { topic: `${m.topicPrefix}/status`, payload: Buffer.from(offline), qos: 1, retain: true },
+      will: will(),
     });
     // Authentication failures are logged by the caller; they never crash EventEmitter.
     this.client.on('error', () => {});
+    discardPresenceOnDisconnect(this.client, topic => topic === `${m.topicPrefix}/status` || topic.startsWith(`${m.topicPrefix}/devices/`) && topic.endsWith('/status'));
+    this.client.on('reconnect', () => { this.client.options.will = will(); });
   }
   get connected() { return this.client.connected; }
   publish = (topic: string, payload: string, retain: boolean) => publishQos1(this.client, topic, payload, retain);

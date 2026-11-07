@@ -14,7 +14,7 @@ src=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 sh -n "$src/one-minihouse-host-health.init"
 mkdir -p /opt/one-minihouse-host-health /etc/one-minihouse-host-health
 chmod 700 /etc/one-minihouse-host-health
-for file in agent.py health_core.py requirements.txt; do
+for file in agent.py health_core.py presence.py requirements.txt; do
     cp "$src/$file" "/opt/one-minihouse-host-health/$file.new"
     chown root:root "/opt/one-minihouse-host-health/$file.new"
     chmod 644 "/opt/one-minihouse-host-health/$file.new"

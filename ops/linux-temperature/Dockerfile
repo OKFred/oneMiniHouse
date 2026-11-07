@@ -16,7 +16,7 @@ ENV PYTHONUNBUFFERED=1 \
     CREDENTIALS_DIRECTORY=/run/secrets
 
 WORKDIR /app
-COPY --chmod=0444 ops/linux-temperature/agent.py ops/linux-temperature/smart_reader.py ops/linux-temperature/healthcheck.py ./
+COPY --chmod=0444 ops/linux-temperature/agent.py ops/linux-temperature/presence.py ops/linux-temperature/smart_reader.py ops/linux-temperature/healthcheck.py ./
 COPY --chmod=0444 ops/host-temperature/read-temperatures.sh ./
 
 USER 10001:10001

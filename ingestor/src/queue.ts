@@ -4,6 +4,7 @@ import {convertHistory,LEGACY_TABLES,type LegacyTable,type LegacyRow} from './hi
 import { collectdTemperatureProcessor } from './collectd.ts';
 import { hostHealthProcessor } from './host-health.ts';
 import { isXiaomiTemperature, xiaomiQualityProcessor, XIAOMI_QUALITY_PROCESSOR_ID } from './xiaomi-quality.ts';
+import { freezePresence, presenceProcessor, presenceObserverProcessor, type PresenceCursor } from './presence.ts';
 export type Target = 'local' | 'supabase';
 export type DeliveryTarget = Target | 'd1' | 'sls';
 export type DeliveryOutcome = 'confirmed' | 'expired';
@@ -25,6 +26,8 @@ export class Queue {
   constructor(path: string, options: QueueOptions, processors:Processor[] = []) {
     this.registerProcessor(collectdTemperatureProcessor);
     this.registerProcessor(hostHealthProcessor);
+    this.registerProcessor(presenceProcessor);
+    this.registerProcessor(presenceObserverProcessor);
     this.registerProcessor(xiaomiQualityProcessor);
     this.registerProcessor({id:PROCESSOR_ID,version:PROCESSOR_VERSION,process:raw=>{
       const prefix=raw.topic.split('/').slice(0,4).join('/');
@@ -80,6 +83,7 @@ export class Queue {
         id TEXT PRIMARY KEY,raw_id TEXT,topic TEXT NOT NULL,payload_base64 TEXT NOT NULL,reason TEXT NOT NULL,
         receive_time_utc INTEGER NOT NULL,replay_time_utc INTEGER,replay_status TEXT NOT NULL DEFAULT 'pending');
       CREATE TABLE IF NOT EXISTS pending_raw(raw_id TEXT PRIMARY KEY REFERENCES raw_message(raw_id) ON DELETE CASCADE);
+      CREATE TABLE IF NOT EXISTS presence_cursor(device_id TEXT PRIMARY KEY,cursor_json TEXT NOT NULL);
       CREATE TRIGGER IF NOT EXISTS pending_raw_add AFTER INSERT ON pending_raw BEGIN UPDATE counts SET value=value+1 WHERE name='outstanding_raw'; END;
       CREATE TRIGGER IF NOT EXISTS pending_raw_remove AFTER DELETE ON pending_raw BEGIN UPDATE counts SET value=value-1 WHERE name='outstanding_raw'; END;
       CREATE TRIGGER IF NOT EXISTS delivery_pending_insert AFTER INSERT ON delivery_job WHEN NEW.raw_id IS NOT NULL AND NEW.status!='done' BEGIN INSERT OR IGNORE INTO pending_raw VALUES(NEW.raw_id); END;
@@ -186,15 +190,37 @@ export class Queue {
     return this.tx(()=>{
       const old=this.getRaw(raw.raw_id);
       if(old){
+        if(processorId===presenceObserverProcessor.id&&raw.source_id===presenceObserverProcessor.id)raw={...raw,source_id:old.source_id};
         if(old.raw_data_sha256!==raw.raw_data_sha256 || old.topic!==raw.topic || old.source_id!==raw.source_id
           || old.source_device_id!==raw.source_device_id) throw new ConflictError('Raw ID reused with different payload or routing');
         this.inc('duplicates');return 'duplicate';
       }
+      if(processorId===presenceObserverProcessor.id)raw={...raw,source_id:canonical({processor:presenceObserverProcessor.id,order:this.observationOrder()})};
       this.capacity();this.saveRaw(raw,raw.raw_data_sha256);
       this.db.prepare(`INSERT INTO processing_job VALUES(?,?,?,'pending',0,NULL,?,?)`).run(raw.raw_id,processorId,version,raw.store_time_utc,raw.store_time_utc);
       this.inc('received');return 'saved';
     });
   }
+  acceptPresence(raw:RawRecord):'saved'|'duplicate' {
+    return this.tx(()=>{
+      const old=this.getRaw(raw.raw_id);
+      if(old){
+        let before;try{before=JSON.parse(old.source_id);}catch{throw new ConflictError('Presence source routing conflict');}
+        const after=JSON.parse(raw.source_id);
+        if(old.raw_data_sha256!==raw.raw_data_sha256||old.topic!==raw.topic||before?.device?.id!==after.device.id
+          ||before?.device?.reporterId!==after.device.reporterId)throw new ConflictError('Presence event ID conflict');
+        // Reuse the first receipt and frozen decision; a retained replay cannot become a fresh observation.
+        return this.acceptRaw(old,presenceProcessor.id,presenceProcessor.version);
+      }
+      const deviceId=JSON.parse(raw.source_id).device.id;
+      const prior=this.db.prepare('SELECT cursor_json FROM presence_cursor WHERE device_id=?').get(deviceId);
+      const frozen=freezePresence(raw,prior?JSON.parse(String(prior.cursor_json)) as PresenceCursor:undefined,this.observationOrder());
+      const result=this.acceptRaw(frozen.raw,presenceProcessor.id,presenceProcessor.version);
+      this.db.prepare('INSERT INTO presence_cursor VALUES(?,?) ON CONFLICT(device_id) DO UPDATE SET cursor_json=excluded.cursor_json').run(deviceId,JSON.stringify(frozen.cursor));
+      return result;
+    });
+  }
+  private observationOrder():number {return Number(this.db.prepare("SELECT value FROM counts WHERE name='received'").get()!.value)+1;}
   importHistorical(raw:RawRecord,row:RecordRow):'saved'|'duplicate' {
     return this.tx(()=>{
       if(hash(raw.raw_data)!==raw.raw_data_sha256)throw new ConflictError('Historical raw hash mismatch');
@@ -251,7 +277,7 @@ export class Queue {
       return true;
     });
   }
-  reject(topic:string,payload:Buffer,reason:string) {
+  reject(topic:string,payload:Buffer,reason:string,scope?:{sourceKind:'mqtt_presence';siteId:string}) {
     this.tx(()=>{
       const now=Date.now(),id=stableUuid(topic+'\n'+payload.toString('base64')); let rawId:string|null=null;
       // Preserve invalid UTF-8 JSON/text as received; unsupported binary stays in quarantine as base64.
@@ -259,7 +285,7 @@ export class Queue {
         const text=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(payload);rawId=id;
         if(!this.db.prepare('SELECT 1 FROM raw_message WHERE raw_id=?').get(id)) {
           this.capacity();
-          this.saveRaw({raw_id:id,topic,source_kind:'mqtt',source_id:topic,source_message_id:null,source_site_id:null,source_gateway_id:null,source_device_id:null,data_kind:'inline',content_type:'text/plain',raw_data:text,raw_data_sha256:hash(text),generate_time_utc:null,receive_time_utc:now,store_time_utc:now,expire_time_utc:now+this.options.rawRetentionDays*DAY},hash(text));
+          this.saveRaw({raw_id:id,topic,source_kind:scope?.sourceKind??'mqtt',source_id:topic,source_message_id:null,source_site_id:scope?.siteId??null,source_gateway_id:null,source_device_id:null,data_kind:'inline',content_type:'text/plain',raw_data:text,raw_data_sha256:hash(text),generate_time_utc:null,receive_time_utc:now,store_time_utc:now,expire_time_utc:now+this.options.rawRetentionDays*DAY},hash(text));
           this.db.prepare(`INSERT INTO processing_job VALUES(?,?,?,'failed',1,?,?,?)`).run(id,PROCESSOR_ID,PROCESSOR_VERSION,reason,now,now);
         }
       } catch(e) { if(!(e instanceof TypeError)) throw e; }

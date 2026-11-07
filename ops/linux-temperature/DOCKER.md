@@ -10,7 +10,7 @@
 docker build -f ops/linux-temperature/Dockerfile -t one-minihouse-temperature:local .
 ```
 
-Dockerfile 专用忽略文件只允许四个程序源文件及构建文件进入上下文，`COPY` 也采用显式清单。镜像使用 Debian Trixie 官方包中的 Python、Paho MQTT 2.x、smartmontools 和 CA 证书，不安装额外 pip 包。多架构发布可使用已配置的 Buildx 构建器：
+Dockerfile 专用忽略文件只允许采集、presence、SMART、健康检查及读取脚本进入上下文，`COPY` 采用显式清单。镜像使用 Debian Trixie 官方包中的 Python、Paho MQTT 2.x、smartmontools 和 CA 证书，不安装额外 pip 包。多架构发布可使用已配置的 Buildx 构建器：
 
 ```sh
 docker buildx build --platform linux/amd64,linux/arm64 \

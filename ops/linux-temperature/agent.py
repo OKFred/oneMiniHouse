@@ -15,6 +15,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse
+from presence import Presence
 
 
 SMART_CACHE_FILE = "/run/one-minihouse-smart-temperature/readings.json"
@@ -356,30 +357,94 @@ class Transport:
         self.pending = {}
         self.generation = 0
         m = config["mqtt"]
-        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=m["client_id"], protocol=mqtt.MQTTv5)
-        self.client.max_queued_messages_set(32)
-        self.client.max_inflight_messages_set(1)
-        self.client.connect_timeout = 10
+        self.presence = Presence(config['site_id'], config['gateway_id'], config['device_id'], m['client_id'])
+        self.presence_topic = topic + '/status'
+        self.presence_lock = threading.Lock()
+        self.presence_birth_pending, self.last_presence_at = False, 0
+        self.presence_retry_at = 0
+        self.config = config
+        self.client_factory = lambda: mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=m["client_id"], protocol=mqtt.MQTTv5, reconnect_on_failure=False)
+        self.reconnect_requested = threading.Event()
+        self.reconnect_at, self.closing = 0, False
         credential_dir = os.environ.get("CREDENTIALS_DIRECTORY")
         password_path = Path(credential_dir) / "mqtt_password" if credential_dir else Path(m["password_file"])
         password = password_path.read_text().strip()
         if not password:
             raise ValueError("Empty MQTT password")
-        self.client.username_pw_set(m["username"], password)
-        self.client.tls_set_context(ssl.create_default_context(cafile=m.get("ca_file")))
-        self.client.reconnect_delay_set(2, 60)
-        self.client.will_set(topic + "/status", encode({"online": False, "quality": "offline", "read_time_utc": None}), 1, True)
+        self.password, self.tls_context = password, ssl.create_default_context(cafile=m.get("ca_file"))
+        self.start_client()
+
+    def start_client(self):
+        m = self.config['mqtt']
+        self.client = self.client_factory()
+        self.client.max_queued_messages_set(32)
+        self.client.max_inflight_messages_set(1)
+        self.client.connect_timeout = 10
+        self.client.username_pw_set(m['username'], self.password)
+        self.client.tls_set_context(self.tls_context)
+        self.client.on_pre_connect = self.prepare_presence
+        self.prepare_presence(self.client, None)
         self.client.on_publish = self.on_publish
         self.client.on_connect = self.on_connect
+        self.client.on_disconnect = lambda *args: self.reconnect_requested.set()
+        self.client.on_connect_fail = lambda *args: self.reconnect_requested.set()
         url = urlparse(m["url"])
-        self.client.connect_async(url.hostname, url.port or 8883, keepalive=30)
+        self.client.connect_async(url.hostname, url.port or 8883, keepalive=30, **({'clean_start': False} if self.generation else {}))
         self.client.loop_start()
+
+    def ensure_connection(self):
+        if self.closing or not self.reconnect_requested.is_set() or time.monotonic() < self.reconnect_at:
+            return
+        self.client.loop_stop()
+        sock = self.client.socket()
+        if sock is not None:
+            sock.close()
+        with self.lock:
+            for event, _ in self.pending.values():
+                event.set()
+            self.pending.clear()
+        self.reconnect_requested.clear()
+        self.reconnect_at = time.monotonic() + 5
+        # Paho has no public per-message deletion API; a fresh single client
+        # discards old live status while telemetry remains in its durable outbox.
+        self.start_client()
+
+    def prepare_presence(self, client, userdata):
+        with self.presence_lock:
+            value = self.presence.begin()
+            self.presence_retry_at = 0
+            client.will_set(self.presence_topic, encode(dict(value, quality='offline', read_time_utc=None)), 1, True)
+
+    def presence_tick(self, quality='degraded', stats=None, birth_only=False):
+        if not self.client.is_connected() or birth_only and not self.presence_birth_pending:
+            return False
+        if not self.presence_birth_pending and time.monotonic() - self.last_presence_at < 60:
+            return False
+        if time.monotonic() < getattr(self, 'presence_retry_at', 0):
+            return False
+        if not self.presence_lock.acquire(blocking=False):
+            return False
+        try:
+            generation = self.generation
+            event = 'online' if self.presence_birth_pending else 'heartbeat'
+            value = self.presence.message(event, True, 'connected' if event == 'online' else 'heartbeat')
+            self.presence_retry_at = time.monotonic() + 60
+            self.publish(self.presence_topic, encode(dict(value, quality=quality,
+                         read_time_utc=value['source_time_utc'], **(stats or {}))), True)
+            if generation == self.generation:
+                self.presence_birth_pending, self.last_presence_at = False, time.monotonic()
+                self.presence_retry_at = 0
+            return True
+        finally:
+            self.presence_lock.release()
 
     def on_connect(self, client, userdata, flags, reason_code, properties):
         if not reason_code.is_failure:
             self.generation += 1
+            self.presence_birth_pending = True
             log("mqtt_connected")
         else:
+            self.reconnect_requested.set()
             log("mqtt_connection_rejected", reason_code=reason_code.value)
 
     def on_publish(self, client, userdata, mid, reason_code, properties):
@@ -405,7 +470,21 @@ class Transport:
                 self.pending.pop(info.mid, None)
 
     def close(self):
-        self.client.disconnect()
+        self.closing = True
+        acknowledged = False
+        if self.client.is_connected():
+            try:
+                value = self.presence.message('offline', False, 'shutdown')
+                self.publish(self.presence_topic, encode(dict(value, quality='offline', read_time_utc=value['source_time_utc'])), True)
+                acknowledged = True
+            except ConnectionError:
+                pass
+        if acknowledged:
+            self.client.disconnect()
+        else:
+            sock = self.client.socket()
+            if sock is not None:
+                sock.close()
         self.client.loop_stop()
 
 
@@ -428,13 +507,14 @@ def run(config, data_dir):
         try:
             while not stop.is_set():
                 try:
+                    transport.ensure_connection()
                     if transport.client.is_connected():
                         state = queue.state()
+                        transport.presence_tick(stats=queue.stats(), birth_only=True)
                         marker = (transport.generation, state)
                         if state and marker != seen:
                             transport.publish(base + "/state", state, True)
                             value = json.loads(state)
-                            transport.publish(prefix + "/status", encode({"online": True, "quality": value["quality"], "read_time_utc": value["read_time_utc"], **queue.stats()}), True)
                             seen = marker
                         row = queue.first()
                         if row:
@@ -454,9 +534,18 @@ def run(config, data_dir):
     worker = threading.Thread(target=publish_loop, name="mqtt-publisher")
     worker.start()
     next_sample = time.monotonic()
+    last_quality = 'degraded'
     try:
         while not stop.is_set():
+            try:
+                transport.presence_tick(last_quality, box.stats())
+            except ConnectionError:
+                pass
+            if time.monotonic() < next_sample:
+                stop.wait(min(1, next_sample - time.monotonic()))
+                continue
             sample, smart_sample, state, smart_batch, gpu_sample, gpu_batch = collect_all_samples(config)
+            last_quality = state['quality']
             metrics, missing = sample["metrics"], sample["source"]["missing_metrics"]
             box.save(sample if metrics else None, state, smart_sample=smart_sample, smart_batch=smart_batch,
                      gpu_sample=gpu_sample, gpu_batch=gpu_batch)
@@ -478,15 +567,10 @@ def run(config, data_dir):
             next_sample += config["interval_seconds"]
             if next_sample < time.monotonic():
                 next_sample = time.monotonic() + config["interval_seconds"]
-            stop.wait(max(0, next_sample-time.monotonic()))
+            stop.wait(min(1, max(0, next_sample-time.monotonic())))
     finally:
         stop.set()
         worker.join(15)
-        if transport.client.is_connected():
-            try:
-                transport.publish(prefix + "/status", encode({"online": False, "quality": "offline", "read_time_utc": None}), True)
-            except ConnectionError:
-                pass
         transport.close()
         box.close()
     if publisher_failed:
