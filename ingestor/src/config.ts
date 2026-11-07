@@ -16,7 +16,7 @@ export interface HostHealthMqttInput extends HostHealthInput {
 export interface MqttConnectionPlan {
   clientId: string; primary: boolean; topicPrefixes: string[]; subscriptions: string[]; unsubscriptions: string[];
   hostHealthInput?: HostHealthMqttInput;
-  presenceDevices?: PresenceDevice[]; presenceSessionId?: string; presenceAvailable?: boolean;
+  presenceDevices?: PresenceDevice[]; presenceSessionId?: string; presenceAvailable?: boolean; presenceCoverageStartAt?: number;
 }
 export interface Config {
   collectdTemperatures?: CollectdTemperatureInput[];

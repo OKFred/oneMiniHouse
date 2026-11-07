@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { EventEmitter } from 'node:events';
 import type { MqttClient,IClientOptions,IPublishPacket } from 'mqtt';
 import { Queue,ConflictError,CapacityError } from '../src/queue.ts';
-import { validateConfig,mqttConnectionPlans,type Config } from '../src/config.ts';
+import { validateConfig,mqttConnectionPlans,type Config,type MqttConnectionPlan } from '../src/config.ts';
 import { MqttConnections,receiveConnectionMessage } from '../src/mqtt-connections.ts';
 import { presenceValues,writePresenceBatch } from '../src/presence-database.ts';
 import { PostgresSink } from '../src/database.ts';
@@ -130,19 +130,159 @@ test('new sessions close older sessions; old wills and out-of-order events never
   }finally{q.close();}
 });
 
-test('unknown-session heartbeats and wills never bootstrap or replace a direct reporter session',()=>{
+test('first unknown heartbeats only seed candidates and wills never establish online state',()=>{
   const q=queue();try{
     coverage(q,'coverage_start');
     const heartbeat=wire({event:'heartbeat',reason:'heartbeat',sequence:1});
     assert.equal(add(q,heartbeat).decision,'unobserved_reporter_session');
     assert.equal(presenceAt([device],take(q),now)[device.id],'unknown');
     assert.equal(add(q,wire(),receipt({retained:true})).decision,'retained_snapshot');
-    assert.equal(add(q,{...heartbeat,event_id:randomUUID(),sequence:2}).decision,'unobserved_reporter_session');
-    assert.equal(add(q).state_after,'online');
-    const other=randomUUID(),later=new Date(now+1000).toISOString();
-    assert.equal(add(q,wire({session_id:other,event:'heartbeat',reason:'heartbeat',sequence:20,source_time_utc:later}),receipt({observedAt:now+1000})).decision,'unobserved_reporter_session');
-    assert.equal(add(q,wire({session_id:other,event:'offline',online:false,reason:'lwt',sequence:null,source_time_utc:null,uptime_ms:null}),receipt({observedAt:now+1000})).decision,'unobserved_reporter_session');
-    assert.equal(add(q,wire({event:'heartbeat',reason:'heartbeat',sequence:1,source_time_utc:later,uptime_ms:1000}),receipt({observedAt:now+1000})).state_after,'online');
+    assert.equal(add(q,{...heartbeat,event_id:randomUUID(),sequence:2}).decision,'pending_candidate_session');
+    assert.equal(add(q,wire({event:'heartbeat',reason:'heartbeat',sequence:3,uptime_ms:1000,source_time_utc:new Date(now+1000).toISOString()}),receipt({observedAt:now+1000})).state_after,'online');
+    const other=randomUUID(),later=new Date(now+2000).toISOString();
+    assert.equal(add(q,wire({session_id:other,event:'heartbeat',reason:'heartbeat',sequence:20,source_time_utc:later}),receipt({observedAt:now+2000})).decision,'unobserved_reporter_session');
+    assert.equal(add(q,wire({session_id:other,event:'offline',online:false,reason:'lwt',sequence:null,source_time_utc:null,uptime_ms:null}),receipt({observedAt:now+2000})).decision,'unobserved_reporter_session');
+    assert.equal(add(q,wire({event:'heartbeat',reason:'heartbeat',sequence:4,source_time_utc:later,uptime_ms:2000}),receipt({observedAt:now+2000})).state_after,'online');
+  }finally{q.close();}
+});
+
+test('observer recovery seeds only a retained candidate and the next genuinely live heartbeat restores a missed session',()=>{
+  for(const retainedEvent of ['online','heartbeat'] as const){
+    const q=queue();try{
+      coverage(q,'coverage_start');add(q);coverage(q,'coverage_end',now+1000,2);
+      const observer2=randomUUID(),session2=randomUUID();
+      const snapshot=wire({session_id:session2,event:retainedEvent,reason:retainedEvent==='online'?'connected':'heartbeat',sequence:2,
+        source_time_utc:new Date(now+60000).toISOString(),uptime_ms:60000});
+      assert.equal(add(q,snapshot,receipt({observerSessionId:observer2,observedAt:now+90000,retained:true,available:false})).applied,false);
+      coverage(q,'coverage_start',now+91000,1,observer2);
+      assert.equal(presenceAt([device],take(q),now+91000)[device.id],'unknown');
+      const liveReceipt=(at:number)=>receipt({observerSessionId:observer2,observedAt:now+at,observerCoverageStartAt:now+91000});
+      const heartbeat=(at:number,sequence:number)=>wire({session_id:session2,event:'heartbeat',reason:'heartbeat',sequence,uptime_ms:at,source_time_utc:new Date(now+at).toISOString()});
+      assert.equal(add(q,heartbeat(85000,3),liveReceipt(92000)).decision,'pending_candidate_session');
+      assert.equal(presenceAt([device],take(q),now+92000)[device.id],'unknown');
+      assert.equal(add(q,heartbeat(120000,4),liveReceipt(120000)).state_after,'online');
+      assert.equal(presenceAt([device],take(q),now+120000)[device.id],'online');
+      assert.equal(add(q,wire({event:'offline',online:false,reason:'lwt',sequence:null,source_time_utc:null,uptime_ms:null}),liveReceipt(121000)).decision,'closed_reporter_session');
+    }finally{q.close();}
+  }
+});
+
+test('retained candidates survive restart without rewriting first receipt and a later observer has its own coverage watermark',()=>{
+  const dir=mkdtempSync(join(tmpdir(),'presence-retained-')),path=join(dir,'inbox.sqlite');let q=new Queue(path,{maxPending:100,maxRejected:10,rawMirror:true});
+  const value=wire({event:'heartbeat',reason:'heartbeat',sequence:1,source_time_utc:new Date(now-600000).toISOString()});
+  try{
+    assert.equal(add(q,value,receipt({retained:true})).applied,false);const first=q.next('local')!;
+    q.close();q=new Queue(path,{maxPending:100,maxRejected:10,rawMirror:true});
+    const observer2=randomUUID(),received=receipt({observerSessionId:observer2,observedAt:now+20000,retained:true,observerCoverageStartAt:now+20000});
+    coverage(q,'coverage_start',now+20000,1,observer2);
+    assert.equal(receivePresence(q,device,bytes(value),received),'duplicate');
+    assert.equal(receivePresence(q,device,bytes(value),{...received,observedAt:now+60000}),'duplicate');
+    q.replay(first.raw_id!,PRESENCE_PROCESSOR_ID,'1');q.processOne();
+    assert.deepEqual(q.next('local'),first);assert.equal(presenceEvent(first).observed_time_utc,new Date(now).toISOString());
+    const delayed=add(q,wire({event:'heartbeat',reason:'heartbeat',sequence:2,uptime_ms:15000,source_time_utc:new Date(now+15000).toISOString()}),receipt({observerSessionId:observer2,observedAt:now+61000,observerCoverageStartAt:now+20000}));
+    assert.equal(delayed.applied,false);assert.equal(delayed.decision,'pending_candidate_session');
+    assert.equal(add(q,wire({event:'heartbeat',reason:'heartbeat',sequence:2,uptime_ms:20500,source_time_utc:new Date(now+20500).toISOString()}),receipt({observerSessionId:observer2,observedAt:now+61000,observerCoverageStartAt:now+20000})).decision,'pending_candidate_session');
+    const live=add(q,wire({event:'heartbeat',reason:'heartbeat',sequence:3,uptime_ms:30000,source_time_utc:new Date(now+30000).toISOString()}),receipt({observerSessionId:observer2,observedAt:now+62000,observerCoverageStartAt:now+20000}));
+    assert.equal(live.state_after,'online');assert.equal(presenceAt([device],take(q),now+62000)[device.id],'online');
+  }finally{q.close();rmSync(dir,{recursive:true,force:true});}
+});
+
+test('closed, older and offline snapshots cannot seed candidates, and a candidate Will closes only that candidate',()=>{
+  const q=queue();try{
+    add(q);add(q,wire({event:'offline',online:false,reason:'lwt',sequence:null,source_time_utc:null,uptime_ms:null}),receipt({observedAt:now+1000}));
+    add(q,wire({source_time_utc:new Date(now+2000).toISOString()}),receipt({observedAt:now+2000,retained:true}));
+    assert.equal(add(q,wire({event:'heartbeat',reason:'heartbeat',sequence:2,source_time_utc:new Date(now+3000).toISOString()}),receipt({observedAt:now+3000})).decision,'closed_reporter_session');
+    for(const offline of [false,true]){
+      const candidate=randomUUID(),snapshot=offline?wire({session_id:candidate,event:'offline',online:false,reason:'lwt',sequence:null,source_time_utc:null,uptime_ms:null})
+        :wire({session_id:candidate,source_time_utc:new Date(now-1).toISOString()});
+      add(q,snapshot,receipt({observedAt:now+4000,retained:true}));
+      assert.equal(add(q,wire({session_id:candidate,event:'heartbeat',reason:'heartbeat',sequence:2,source_time_utc:new Date(now+5000).toISOString()}),receipt({observedAt:now+5000})).decision,'unobserved_reporter_session');
+    }
+    const candidate=randomUUID();add(q,wire({session_id:candidate,source_time_utc:new Date(now+6000).toISOString()}),receipt({observedAt:now+6000,retained:true}));
+    assert.equal(add(q,wire({session_id:candidate,event:'offline',online:false,reason:'lwt',sequence:null,source_time_utc:null,uptime_ms:null}),receipt({observedAt:now+7000})).applied,false);
+    assert.equal(add(q,wire({session_id:candidate,event:'heartbeat',reason:'heartbeat',sequence:2,source_time_utc:new Date(now+8000).toISOString()}),receipt({observedAt:now+8000})).decision,'closed_reporter_session');
+  }finally{q.close();}
+});
+
+test('birthless, pre-SUBACK and corrected-clock candidates require a future-generated heartbeat plus advancing counters',()=>{
+  const seeds:[Partial<PresenceWire>,Partial<PresenceReceipt>][]=[
+    [{event:'heartbeat',reason:'heartbeat'},{}],
+    [{},{available:false}],
+    [{event:'heartbeat',reason:'heartbeat'},{available:false}],
+    [{source_time_utc:new Date(now+3600000).toISOString()},{}],
+    [{event:'heartbeat',reason:'heartbeat',source_time_utc:new Date(now+3600000).toISOString()},{}],
+    [{source_time_utc:new Date(now-3600000).toISOString()},{}],
+    [{source_time_utc:null},{}],
+  ];
+  for(const [changes,received] of seeds){
+    const q=queue();try{
+      coverage(q,'coverage_start');
+      const first=wire({sequence:1,uptime_ms:1000,...changes});
+      assert.equal(add(q,first,receipt(received)).applied,false);
+      const hb=(source:number,sequence:number,uptime:number)=>wire({event:'heartbeat',reason:'heartbeat',sequence,uptime_ms:uptime,source_time_utc:new Date(now+source).toISOString()});
+      assert.equal(add(q,hb(500,2,1001),receipt({observedAt:now+1000})).decision,'pending_candidate_session');
+      assert.equal(add(q,hb(501,1,1001),receipt({observedAt:now+1000})).decision,'pending_candidate_session');
+      assert.equal(add(q,hb(501,2,1000),receipt({observedAt:now+1000})).decision,'pending_candidate_session');
+      assert.equal(add(q,hb(501,3,999),receipt({observedAt:now+1000})).decision,'pending_candidate_session');
+      const live=add(q,hb(501,2,1001),receipt({observedAt:now+1000}));
+      assert.equal(live.applied,true);assert.equal(live.state_after,'online');
+      assert.equal(presenceAt([device],take(q),now+1000)[device.id],'online');
+      assert.equal(receivePresence(q,device,bytes(first),receipt({observedAt:now+10000,retained:true,duplicate:true})),'duplicate');
+      assert.equal(presenceAt([device],take(q),now+10000)[device.id],'online');
+    }finally{q.close();}
+  }
+});
+
+test('an older unknown source cannot seed over known progress but later corrected live heartbeats self-recover',()=>{
+  const q=queue();try{
+    add(q);const nextSession=randomUUID();
+    const hb=(source:number,sequence:number,uptime:number)=>wire({session_id:nextSession,event:'heartbeat',reason:'heartbeat',sequence,uptime_ms:uptime,source_time_utc:new Date(now+source).toISOString()});
+    assert.equal(add(q,hb(-1,1,1000),receipt({observedAt:now+1000})).applied,false);
+    assert.equal(add(q,hb(1000,2,2000),receipt({observedAt:now+1000})).decision,'unobserved_reporter_session');
+    assert.equal(add(q,hb(1500,3,2001),receipt({observedAt:now+1500})).decision,'pending_candidate_session');
+    assert.equal(add(q,hb(1501,3,2001),receipt({observedAt:now+1501})).state_after,'online');
+  }finally{q.close();}
+});
+
+test('an accepted different-session birth retires an older candidate even within the 500ms clock allowance',()=>{
+  const q=queue();try{
+    coverage(q,'coverage_start');
+    add(q,wire({sequence:1,uptime_ms:1000}),receipt({retained:true}));
+    const current=randomUUID();
+    const birth=add(q,wire({session_id:current,source_time_utc:new Date(now+10).toISOString()}),receipt({observedAt:now+10}));
+    assert.equal(birth.state_after,'online');
+    const old=add(q,wire({event:'heartbeat',reason:'heartbeat',sequence:2,uptime_ms:2000,source_time_utc:new Date(now+700).toISOString()}),receipt({observedAt:now+700}));
+    assert.equal(old.applied,false);assert.equal(old.decision,'closed_reporter_session');
+    assert.equal(presenceAt([device],take(q),now+700)[device.id],'online');
+    assert.equal(add(q,wire({session_id:current,event:'heartbeat',reason:'heartbeat',sequence:1,uptime_ms:1000,source_time_utc:new Date(now+1000).toISOString()}),receipt({observedAt:now+1000})).state_after,'online');
+  }finally{q.close();}
+});
+
+test('a retained candidate never evicts a live known session; new coverage rejects delayed known-session heartbeats',()=>{
+  const q=queue();try{
+    coverage(q,'coverage_start');add(q);
+    const observer2=randomUUID();coverage(q,'coverage_start',now+20000,1,observer2);
+    const r=(at:number)=>receipt({observerSessionId:observer2,observedAt:now+at,observerCoverageStartAt:now+20000});
+    const hb=(at:number,sequence:number,uptime=at)=>wire({event:'heartbeat',reason:'heartbeat',sequence,uptime_ms:uptime,source_time_utc:new Date(now+at).toISOString()});
+    const candidate=randomUUID();add(q,wire({session_id:candidate,source_time_utc:new Date(now+10000).toISOString()}),{...r(20000),retained:true});
+    assert.equal(add(q,hb(15000,1),r(21000)).decision,'before_observer_coverage');
+    assert.equal(presenceAt([device],take(q),now+21000)[device.id],'unknown');
+    assert.equal(add(q,hb(30501,1),r(30000)).decision,'future_source_time');
+    assert.equal(add(q,hb(30500,2,30502),r(30000)).state_after,'online');
+    assert.equal(add(q,hb(40000,2),r(40000)).decision,'old_sequence');
+    assert.equal(add(q,hb(40000,3,10),r(40000)).decision,'regressed_reporter_clock');
+    assert.equal(add(q,wire({session_id:candidate,event:'heartbeat',reason:'heartbeat',sequence:2,uptime_ms:50000,source_time_utc:new Date(now+50000).toISOString()}),r(50000)).decision,'unobserved_reporter_session');
+  }finally{q.close();}
+});
+
+test('a coarse-clock live birth at the coverage boundary stays pending and self-recovers on its next heartbeat',()=>{
+  const q=queue();try{
+    coverage(q,'coverage_start',now+100);
+    const first=add(q,wire(),receipt({observedAt:now+200,observerCoverageStartAt:now+100}));
+    assert.equal(first.applied,false);assert.equal(first.state_after,'unknown');assert.equal(first.decision,'before_observer_coverage');
+    assert.equal(presenceAt([device],take(q),now+200)[device.id],'unknown');
+    const next=add(q,wire({event:'heartbeat',reason:'heartbeat',sequence:1,uptime_ms:60000,source_time_utc:new Date(now+60000).toISOString()}),receipt({observedAt:now+60000,observerCoverageStartAt:now+100}));
+    assert.equal(next.state_after,'online');assert.equal(presenceAt([device],take(q),now+60000)[device.id],'online');
   }finally{q.close();}
 });
 
@@ -270,21 +410,56 @@ test('presence sessions are ephemeral, retained delivery is explicit, and durabl
   const baseline=JSON.parse(readFileSync(new URL('../config/ingestor.example.json',import.meta.url),'utf8'));
   const cfg:Config=validateConfig({...baseline,presence:{devices:[device],clients:[{clientId:'example-presence-reader',topics:[device.topic]}]}});
   const q=queue(),seen:IClientOptions[]=[],clients:any[]=[],coverageEvents:string[]=[];let at=now;
+  let activePlan:MqttConnectionPlan|undefined;
   class Client extends EventEmitter{
     connected=false;handleMessage:any;stream={destroy:()=>{this.connected=false;this.emit('close');}};
-    subscribe(topics:string[],options:any,done:any){if(topics.includes(device.topic))assert.deepEqual(options,{qos:1,rh:0});done(null,topics.map(topic=>({topic,qos:1})));}
+    defer=false;pendingSuback?:()=>void;
+    subscribe(topics:string[],options:any,done:any){if(topics.includes(device.topic))assert.deepEqual(options,{qos:1,rh:0});
+      const finish=()=>done(null,topics.map(topic=>({topic,qos:1})));
+      if(this.defer)this.pendingSuback=finish;else finish();}
     unsubscribe(topics:string[],done:any){done(null,{cmd:'unsuback',granted:topics.map(()=>17)});}
     async endAsync(){this.connected=false;}
   }
   const con=new MqttConnections(cfg,'synthetic',(packet,plan)=>{receiveConnectionMessage(q,cfg,plan,packet);},()=>{},{
     now:()=>at,connect:(_url,options)=>{seen.push(options);const c=new Client();clients.push(c);return c as unknown as MqttClient;},
-    coverage:(plan,event,sequence,time)=>{coverageEvents.push(event);q.acceptRaw(observerRaw(device.siteId,plan.clientId,plan.presenceSessionId!,sequence,event,time),'presence-observer','1');},
+    coverage:(plan,event,sequence,time)=>{activePlan=plan;if(event==='coverage_start')assert.equal(plan.presenceCoverageStartAt,undefined);
+      coverageEvents.push(event);q.acceptRaw(observerRaw(device.siteId,plan.clientId,plan.presenceSessionId!,sequence,event,time),'presence-observer','1');},
   });
   try{
     assert.equal(seen.at(-1)!.clean,true);assert.equal(seen.at(-1)!.properties!.sessionExpiryInterval,0);assert.equal(seen[0].clean,false);
     const client=clients.at(-1);client.connected=true;client.emit('connect',{sessionPresent:false});assert.deepEqual(coverageEvents,['coverage_start']);
+    assert.equal(activePlan!.presenceCoverageStartAt,now);
     at+=30000;con.pulsePresenceCoverage();assert.deepEqual(coverageEvents,['coverage_start','coverage_heartbeat']);
+    assert.equal(activePlan!.presenceCoverageStartAt,now); // The coverage start is not the renewable coverage lease.
     client.handleMessage({cmd:'publish',topic:device.topic,qos:1,retain:false,dup:false,payload:bytes(wire({source_time_utc:new Date(Date.now()).toISOString()}))} as IPublishPacket,(error:unknown)=>{assert.ifError(error);assert.equal(q.stats().raw_records,3);});
+    const row=q.nextBatch('local',10).find(row=>presenceEvent(row).record_kind==='device')!;
+    assert.equal(JSON.parse(q.getRaw(row.raw_id!)!.source_id).receipt.observerCoverageStartAt,now);
+    const firstSession=activePlan!.presenceSessionId;
     client.stream.destroy();assert.equal(coverageEvents.at(-1),'coverage_end');
+    assert.equal(activePlan!.presenceCoverageStartAt,undefined);
+    at+=1000;client.defer=true;client.connected=true;client.emit('connect',{sessionPresent:false});
+    assert.notEqual(activePlan!.presenceSessionId,firstSession);assert.equal(activePlan!.presenceCoverageStartAt,undefined);
+    assert.equal(activePlan!.presenceAvailable,false);
+    at+=1000;client.pendingSuback!();assert.equal(activePlan!.presenceCoverageStartAt,at);
+    at+=30000;con.pulsePresenceCoverage();assert.equal(activePlan!.presenceCoverageStartAt,now+32000);
   }finally{await con.stop();q.close();}
+});
+
+test('a failed durable coverage start cannot expose a coverage watermark or available observer',async()=>{
+  const baseline=JSON.parse(readFileSync(new URL('../config/ingestor.example.json',import.meta.url),'utf8'));
+  const cfg=validateConfig({...baseline,presence:{devices:[device],clients:[{clientId:'example-presence-reader',topics:[device.topic]}]}});
+  let activePlan:MqttConnectionPlan|undefined;const clients:any[]=[];
+  class Client extends EventEmitter{
+    connected=false;handleMessage:any;stream={destroy:()=>{this.connected=false;this.emit('close');}};
+    subscribe(topics:string[],_options:any,done:any){done(null,topics.map(topic=>({topic,qos:1})));}
+    unsubscribe(topics:string[],done:any){done(null,{cmd:'unsuback',granted:topics.map(()=>17)});}
+    async endAsync(){this.connected=false;}
+  }
+  const con=new MqttConnections(cfg,'synthetic',()=>{},()=>{},{now:()=>now,connect:()=>{const client=new Client();clients.push(client);return client as unknown as MqttClient;},
+    coverage:(plan,event)=>{activePlan=plan;if(event==='coverage_start')throw new Error('synthetic durable storage unavailable');}});
+  try{
+    const client=clients.at(-1);client.connected=true;client.emit('connect',{sessionPresent:false});
+    assert.equal(activePlan!.presenceAvailable,false);assert.equal(activePlan!.presenceCoverageStartAt,undefined);
+    assert.equal(client.connected,false);assert.equal(con.snapshot().mqtt_connections.at(-1)!.subscribed,false);
+  }finally{await con.stop();}
 });

@@ -29,7 +29,8 @@ export function receiveConnectionMessage(queue: Queue, config: Config, plan: Mqt
     const device=plan.presenceDevices.find(value=>value.topic===packet.topic);
     if(!device||!plan.presenceSessionId||packet.qos!==1){queue.reject(packet.topic,bytes,'INVALID_PRESENCE_TRANSPORT',device?{sourceKind:'mqtt_presence',siteId:device.siteId}:undefined);return 'rejected' as const;}
     return receivePresence(queue,device,bytes,{observerClientId:plan.clientId,observerSessionId:plan.presenceSessionId,
-      observedAt:Date.now(),retained:packet.retain,qos:packet.qos,duplicate:packet.dup,available:plan.presenceAvailable===true});
+      observedAt:Date.now(),retained:packet.retain,qos:packet.qos,duplicate:packet.dup,available:plan.presenceAvailable===true,
+      ...(plan.presenceCoverageStartAt===undefined?{}:{observerCoverageStartAt:plan.presenceCoverageStartAt})});
   }
   if (plan.hostHealthInput && (packet.qos !== 1 || packet.retain)) {
     queue.reject(packet.topic, Buffer.from('[invalid host health redacted]'), 'INVALID_HOST_HEALTH_TRANSPORT');
@@ -193,7 +194,7 @@ export class MqttConnections {
       client.on('offline', () => { unavailable(); emit('mqtt_offline'); });
       client.on('close', unavailable);
       client.on('connect', packet => {
-        if(plan.presenceDevices){plan.presenceSessionId=randomUUID();plan.presenceAvailable=false;connection.coverageSequence=0;}
+        if(plan.presenceDevices){plan.presenceSessionId=randomUUID();plan.presenceAvailable=false;delete plan.presenceCoverageStartAt;connection.coverageSequence=0;}
         connection.generation++;
         connection.health.connected = true; connection.health.subscribed = false;
         emit('mqtt_connected', { session_present: packet.sessionPresent, server_session_expiry: packet.properties?.sessionExpiryInterval });
@@ -205,9 +206,11 @@ export class MqttConnections {
     if(!connection.plan.presenceDevices||event==='coverage_end'&&!connection.plan.presenceAvailable)return true;
     try{
       this.coverage(connection.plan,event,++connection.coverageSequence,now);
+      if(event==='coverage_start'&&connection.plan.presenceCoverageStartAt===undefined)connection.plan.presenceCoverageStartAt=now;
+      if(event==='coverage_end')delete connection.plan.presenceCoverageStartAt;
       connection.coverageAt=now;connection.plan.presenceAvailable=event!=='coverage_end';return true;
     }catch{
-      connection.plan.presenceAvailable=false;connection.health.intake_paused=true;connection.health.error='PRESENCE_COVERAGE_STORAGE_FAILED';
+      connection.plan.presenceAvailable=false;delete connection.plan.presenceCoverageStartAt;connection.health.intake_paused=true;connection.health.error='PRESENCE_COVERAGE_STORAGE_FAILED';
       connection.client.stream?.destroy();return false;
     }
   }

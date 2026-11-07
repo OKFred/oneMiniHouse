@@ -20,11 +20,12 @@ export interface PresenceWire {
 }
 export interface PresenceReceipt {
   observerClientId: string; observerSessionId: string; observedAt: number; retained: boolean; qos: number; duplicate: boolean; available: boolean;
-  observationOrder?: number;
+  observationOrder?: number; observerCoverageStartAt?: number;
 }
 export interface PresenceCursor {
   sessionId: string | null; closedSessions: string[]; sequence: number; sourceTime: number; uptimeMs: number;
   bootId?: string | null; pendingSourceTime?: number;
+  candidateSessionId?: string; candidateObservedAt?: number; candidateSequence?: number; candidateUptimeMs?: number;
 }
 export interface PresenceEvent {
   record_kind: 'device' | 'observer'; event_id: string; physical_device_id: string | null; device_name: string | null;
@@ -89,7 +90,7 @@ export function validatePresenceConfig(value: unknown, existingClientIds: string
   for(const device of devices){
     const client=(value.clients as PresenceConfig['clients']).find(c=>c.topics.includes(device.topic))!;
     const frozen={processor:PRESENCE_PROCESSOR_ID,device,receipt:{observerClientId:client.clientId,observerSessionId:'00000000-0000-4000-8000-000000000000',
-      observedAt:Number.MAX_SAFE_INTEGER,observationOrder:Number.MAX_SAFE_INTEGER,retained:false,qos:1,duplicate:false,available:true},
+      observedAt:Number.MAX_SAFE_INTEGER,observationOrder:Number.MAX_SAFE_INTEGER,observerCoverageStartAt:Number.MAX_SAFE_INTEGER,retained:false,qos:1,duplicate:false,available:true},
       decision:{applied:true,state:'unknown',reason:'unobserved_reporter_session',validUntil:Number.MAX_SAFE_INTEGER}};
     if(Buffer.byteLength(canonical(frozen))>2048)throw new Error('Presence frozen mapping exceeds archive metadata limit');
   }
@@ -151,6 +152,7 @@ export function decodePresence(device: PresenceDevice, bytes: Buffer): PresenceW
 export function presenceRaw(device: PresenceDevice, bytes: Buffer, receipt: PresenceReceipt, retentionDays = 180): RawRecord {
   const wire = decodePresence(device,bytes);
   if (!identifier(receipt.observerClientId) || !isUuid(receipt.observerSessionId) || !integer(receipt.observedAt)
+    || (receipt.observerCoverageStartAt!==undefined&&!integer(receipt.observerCoverageStartAt))
     || typeof receipt.retained !== 'boolean' || typeof receipt.duplicate !== 'boolean' || typeof receipt.available !== 'boolean' || receipt.qos !== 1
     || !integer(retentionDays,1) || retentionDays > 3650) fail();
   const source: FrozenSource = { processor: PRESENCE_PROCESSOR_ID, device, receipt };
@@ -166,17 +168,46 @@ export function decidePresence(wire: PresenceWire, device: PresenceDevice, recei
   const cursor: PresenceCursor = previous ? { ...previous, closedSessions: [...previous.closedSessions] }
     : { sessionId: null, closedSessions: [], sequence: -1, sourceTime: -1, uptimeMs: -1 };
   const ignore = (reason: string) => ({ cursor, decision: { applied: false, state: 'unknown' as PresenceState, reason, validUntil: null } });
-  if (receipt.retained) return ignore('retained_snapshot');
-  if (!receipt.available) return ignore('observer_unavailable');
   const source = wire.source_time_utc === null ? null : Date.parse(wire.source_time_utc);
-  if (source !== null && source > receipt.observedAt+500) return ignore('future_source_time');
+  const clearCandidate = () => { delete cursor.candidateSessionId; delete cursor.candidateObservedAt; delete cursor.candidateSequence; delete cursor.candidateUptimeMs; };
+  const seedCandidate = () => {
+    if (device.kind==='direct' && ['online','heartbeat'].includes(wire.event)
+      && wire.sequence!==null && wire.uptime_ms!==null
+      && !cursor.closedSessions.includes(wire.session_id) && (source===null || source>=cursor.sourceTime)
+      && cursor.candidateSessionId!==wire.session_id) {
+      cursor.candidateSessionId=wire.session_id;cursor.candidateObservedAt=receipt.observedAt;
+      cursor.candidateSequence=wire.sequence!;cursor.candidateUptimeMs=wire.uptime_ms!;
+    }
+  };
+  if (receipt.retained) {
+    // Candidates keep only identity/counter evidence; snapshots never advance trusted progress or state.
+    seedCandidate();
+    return ignore('retained_snapshot');
+  }
+  if (!receipt.available) { seedCandidate();return ignore('observer_unavailable'); }
+  if (source !== null && source > receipt.observedAt+500) { seedCandidate();return ignore('future_source_time'); }
   if (wire.event !== 'offline' || wire.reason !== 'lwt') {
-    if (source === null) return ignore('source_clock_unknown');
-    if (device.freshnessSeconds!==null&&receipt.observedAt-source > device.freshnessSeconds*1000) return ignore('delayed_source_event');
+    if (source === null) { seedCandidate();return ignore('source_clock_unknown'); }
+    if (device.freshnessSeconds!==null&&receipt.observedAt-source > device.freshnessSeconds*1000) { seedCandidate();return ignore('delayed_source_event'); }
   }
   if (cursor.closedSessions.includes(wire.session_id)) return ignore('closed_reporter_session');
+  const candidate=cursor.candidateSessionId===wire.session_id && cursor.candidateObservedAt!==undefined;
+  const candidateWatermark=Math.max(cursor.candidateObservedAt??-1,receipt.observerCoverageStartAt??-1)+500;
+  if (candidate) {
+    if (wire.event==='offline' && wire.session_id!==cursor.sessionId) {
+      cursor.closedSessions=[...cursor.closedSessions,wire.session_id].slice(-64);clearCandidate();
+      return ignore('unobserved_reporter_session');
+    }
+    if (wire.event!=='offline' && (wire.event!=='heartbeat' || source===null || source<=candidateWatermark
+      || wire.sequence===null || cursor.candidateSequence===undefined || wire.sequence<=cursor.candidateSequence
+      || wire.uptime_ms===null || cursor.candidateUptimeMs===undefined || wire.uptime_ms<=cursor.candidateUptimeMs)) return ignore('pending_candidate_session');
+  }
+  const beforeCoverage=device.kind==='direct' && wire.event!=='offline' && source!==null
+    && receipt.observerCoverageStartAt!==undefined && source<=receipt.observerCoverageStartAt;
+  if (beforeCoverage) { seedCandidate();return ignore('before_observer_coverage'); }
   if (wire.session_id !== cursor.sessionId) {
-    if (wire.event === 'offline' || device.kind === 'direct' && wire.event !== 'online') return ignore('unobserved_reporter_session');
+    if (wire.event === 'offline') return ignore('unobserved_reporter_session');
+    if (device.kind === 'direct' && wire.event !== 'online' && !candidate) { seedCandidate();return ignore('unobserved_reporter_session'); }
     if (source === null || source < cursor.sourceTime || device.kind !== 'direct' && source === cursor.sourceTime) return ignore('older_reporter_session');
     const sameRuntimeAdvanced = wire.boot_id !== null && wire.boot_id === cursor.bootId && wire.uptime_ms !== null && wire.uptime_ms > cursor.uptimeMs;
     const oldSessionClosed = cursor.sessionId !== null && cursor.closedSessions.includes(cursor.sessionId);
@@ -188,10 +219,14 @@ export function decidePresence(wire: PresenceWire, device: PresenceDevice, recei
   }
   if (wire.sequence !== null && wire.sequence <= cursor.sequence) return ignore('old_sequence');
   if (source !== null && source < cursor.sourceTime || wire.uptime_ms !== null && wire.uptime_ms < cursor.uptimeMs) return ignore('regressed_reporter_clock');
+  if (wire.event==='online' && cursor.candidateSessionId && cursor.candidateSessionId!==wire.session_id) {
+    cursor.closedSessions=[...cursor.closedSessions,cursor.candidateSessionId].slice(-64);clearCandidate();
+  }
   if (wire.sequence !== null) cursor.sequence = wire.sequence;
   if (wire.uptime_ms !== null) cursor.uptimeMs = wire.uptime_ms;
   if (source !== null) cursor.sourceTime = source;
   if (wire.event === 'offline') cursor.closedSessions = [...cursor.closedSessions,wire.session_id].slice(-64);
+  if ((wire.session_id===cursor.candidateSessionId && wire.event==='offline') || (source!==null && source>candidateWatermark)) clearCandidate();
   if (cursor.pendingSourceTime !== undefined) {
     if (wire.event !== 'offline' && source !== null && source <= cursor.pendingSourceTime) {
       return { cursor, decision: { applied: true, state: 'unknown' as PresenceState, reason: 'pending_reporter_session', validUntil: null } };

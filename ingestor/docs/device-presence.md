@@ -47,6 +47,12 @@ Handling=0. Broker-delivered subscription snapshots are archived with retain=tru
 normal live deliveries arrive with retain=false. Retained snapshots never create
 an online/offline transition or coverage history.
 
+If a connection birth was missed, a snapshot or first unknown-session heartbeat
+only records a pending candidate. A later live heartbeat must advance its sequence
+and uptime, and its source UTC must exceed both the first candidate receipt and
+the current observer coverage start by more than 500 ms before it can establish
+online. A new live birth retires any different pending session.
+
 With unknown source UTC, publish null and keep diagnostics; it cannot establish
 online. Source UTC more than 500 ms ahead of first receipt and observations older than their configured freshness window are archived
 without advancing state. The 500 ms clock allowance never changes original time;
