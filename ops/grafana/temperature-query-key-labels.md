@@ -27,25 +27,38 @@ SQL, frame exports and execution plans remain private.
 
 ## Verification
 
-On 2026-11-08 a same-snapshot read-only comparison used the actual Grafana reader,
-the actual seven-day 300-second request and the existing 15-second statement
-timeout. The original CSV copy took 6.315 seconds. Candidate copies took 4.830,
-4.954 and 4.848 seconds. All 84,290 `(time,metric)` rows and NULL states matched;
-the maximum absolute floating-point difference was `1.421e-14` against the
-`1e-10` tolerance. Different CSV bit hashes are not treated as value differences.
-Instrumented EXPLAIN took 5.816 seconds; it is separate from COPY wall time.
+On 2026-11-08 same-snapshot read-only comparisons used the actual Grafana reader,
+the complete seven-day 300-second query and the existing 15-second statement
+timeout. The adopted label lookup with intermediate C grouping copied all
+84,290 `(time,metric)` rows in **4.709, 4.577 and 4.565 seconds**, including CSV
+transfer (baseline 6.224 seconds). All values and NULL states matched within
+`1e-10`; different CSV bit hashes are not treated as value differences. The
+default collation was verified deterministic. Instrumented EXPLAIN took 5.631
+seconds and is recorded separately from complete-query COPY wall time.
 
-These measurements show a database improvement with limited headroom. They do
-not prove a five-second Grafana request, which also includes time-series frame
-conversion and transport. Browser acceptance at the actual interval remains a
-separate check. A 600-second benchmark cannot establish the 300-second budget.
+The complete database query therefore met the five-second budget in all three
+measured runs. The deployed Grafana request took **5.06 seconds**, including
+time-series frame conversion and transport. Its result retained **42 numeric
+series and 2,017 time points**. That browser request remains slightly above five
+seconds; the database result does not establish a five-second end-to-end request.
+A 600-second benchmark cannot establish the actual 300-second budget.
 
-With intermediate C grouping and the same default-collation labels, a further
-same-snapshot comparison copied all 84,290 rows in 4.709, 4.577 and 4.565 seconds
-(baseline 6.224 seconds); the verified default collation was deterministic and
-all values/NULLs matched within the same tolerance. Instrumented EXPLAIN was
-5.631 seconds. This establishes the database COPY budget, while the Grafana
-format/transport/browser budget remains unverified.
+Two subsequent private experiments were not adopted: an exact count-state guard
+with numeric fallback took 4.815, 4.767 and 4.879 seconds; an integer metric-label
+dictionary took 4.936, 4.997 and 4.895 seconds. Both matched every result, but
+neither improved on the adopted query enough to justify its added complexity.
+The deployed query keeps the original numeric sum/count aggregation.
+
+The statement timeout, database settings, time resolution and existing reader
+permissions were not increased. Complete raw-result and aggregate comparisons
+preserved values across the three restricted source views; the actual reader
+could still read the permitted views and could not read the telemetry base table.
+Private SQL, execution plans and frame exports remain outside version control.
+
+This record covers the temperature query. Presence cloud ACL approval and quota
+verification remain pending, and the presence publisher rollout to the 17
+physical devices has not been deployed. These measurements do not establish
+completion of the presence rollout or all dashboard regression checks.
 
 The generator requires `--collation-evidence .local/collation.private.json`.
 The JSON must contain the boolean `deterministic_default_collation: true` from
