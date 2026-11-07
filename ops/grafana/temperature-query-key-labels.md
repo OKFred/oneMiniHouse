@@ -6,6 +6,12 @@ expressions again for every time bucket. A small materialized DISTINCT identity
 set now precedes the label projection, and the original buckets join those labels
 back by device/sensor identity with a NULL-safe device-name check.
 
+The server category predicate is also evaluated in that materialized identity
+lookup. It depends only on sensor ID and the category selector, so it filters
+the small identity set before the bucket join. The phone and host-health category
+predicates remain unchanged. NULL selectors, aliases across categories and NULL
+labels retain the original SQL filtering and weighted-mean behavior.
+
 Only the server's intermediate identity grouping uses `COLLATE "C"`. Generation
 requires private evidence that the target database's default collation is
 deterministic, and rejects source snapshots with an explicit collation. Labels
@@ -37,11 +43,35 @@ default collation was verified deterministic. Instrumented EXPLAIN took 5.631
 seconds and is recorded separately from complete-query COPY wall time.
 
 The complete database query therefore met the five-second budget in all three
-measured runs. The deployed Grafana request took **5.06 seconds**, including
+measured runs. Before the category-predicate move, Grafana took **5.06 seconds**, including
 time-series frame conversion and transport. Its result retained **42 numeric
 series and 2,017 time points**. That browser request remains slightly above five
-seconds; the database result does not establish a five-second end-to-end request.
+seconds; that database result does not establish a five-second end-to-end request.
 A 600-second benchmark cannot establish the actual 300-second budget.
+
+After moving the server category predicate into the identity lookup, same-snapshot
+comparisons at the same seven-day window and 300-second interval produced:
+
+| Selection | Complete result rows | Three COPY wall times |
+| --- | ---: | --- |
+| Memory | 8,068 | 3.305, 3.304, 3.360 seconds |
+| All | 84,290 | 4.604, 4.683, 4.683 seconds |
+
+Each result matched its corresponding baseline, including values and NULL
+states, within the same `1e-10` tolerance. The category-predicate move is deployed.
+All six browser selections rendered the expected series; All retained 42 numeric
+series and 2,017 points. Latest Grafana request times were 5.02 seconds for All
+and 3.43 seconds for Memory. The complete database query passed five seconds;
+the All browser request, including conversion and transport, remains slightly above it.
+
+The four existing dashboard tabs rendered their existing data. Public electricity
+remained electricity-only, but concurrent public-panel queries intermittently failed
+with PostgreSQL SQLSTATE 53100 (POSIX shared-memory exhaustion). The container
+had a 64 MiB shared-memory limit; after the burst, usage returned below 2 MiB.
+The affected panels query the unchanged electricity view; the failure moved to
+different panels on refresh. The extra regression tab has automatic refresh off.
+No PostgreSQL restart or container/resource setting was performed. Public-page
+regression therefore remains a known operational failure, not an all-passed check.
 
 Two subsequent private experiments were not adopted: an exact count-state guard
 with numeric fallback took 4.815, 4.767 and 4.879 seconds; an integer metric-label
@@ -77,3 +107,6 @@ Run `python ops/grafana/temperature-query-late-labels-test.py -v` for generator 
 semantic checks. Set `LATE_LABELS_POSTGRES=1` for a guarded, network-isolated local
 PostgreSQL 17 comparison covering aliases, unequal weights, NULL names/labels,
 all-NULL values, real zero, empty windows and actual-reader base-table denial.
+The eight-test suite also checks that the server predicate exists only in the
+materialized lookup, all five categories plus All, absent/NULL selectors, and
+same-label aliases whose means differ when their categories are selected.

@@ -83,6 +83,26 @@ class LateLabelTests(unittest.TestCase):
         self.assertIn('${temperature_category:sqlstring}', labels)
         self.assertIn("device_name || ' / '", labels)
 
+    def test_server_category_is_evaluated_only_in_the_materialized_identity_lookup(self):
+        snapshot, dashboard = fixture()
+        sql = verified_render(snapshot, dashboard)
+        marker = 'temperature_label_lookup_0 AS MATERIALIZED ('
+        opening = sql.index(marker) + len(marker) - 1
+        lookup = sql[opening + 1:query.optimizer.closing_parenthesis(sql, opening)]
+        self.assertIn('FROM temperature_label_keys_0\nWHERE (${temperature_category:sqlstring}', lookup)
+        marker = 'temperature_labels AS ('
+        opening = sql.index(marker) + len(marker) - 1
+        branches = query.optimizer.split_top_level(sql[opening + 1:query.optimizer.closing_parenthesis(sql, opening)], 'UNION ALL')
+        self.assertTrue(branches[0].rstrip().endswith('WHERE b.device_name IS NOT DISTINCT FROM l.device_name'))
+        self.assertNotIn('${temperature_category:sqlstring}', branches[0])
+        self.assertTrue(all('${temperature_category:sqlstring}' in branch for branch in branches[1:]))
+        for unsupported in ('device_name', 'temperature_c', 'read_time_utc'):
+            changed = json.loads(json.dumps(dashboard))
+            target = changed['panels'][0]['targets'][0]
+            target['rawSql'] = target['rawSql'].replace("sensor_id = 'synthetic'", unsupported + " = 'synthetic'")
+            with self.assertRaises(ValueError):
+                verified_render(snapshot, changed)
+
     def test_snapshot_expressions_are_quote_aware_and_unknown_shapes_fail_closed(self):
         self.assertEqual(query.label("SELECT 'sensor AS sensor_id'::text AS sensor_id,'AS sensor_name t.device_id UNION ALL'::text AS sensor_name FROM safe"), "'AS sensor_name t.device_id UNION ALL'::text")
         for changed in [SERVER.replace('t.gateway_id', 't.unexpected', 1), SERVER.replace("'Example MCU'::text AS device_name", "t.gateway_id AS device_name")]:
@@ -238,6 +258,51 @@ GRANT SELECT ON iot.home_server_temperature_samples,iot.home_phone_temperature_s
                     self.assertEqual(new, [])
             with self.assertRaises(subprocess.CalledProcessError):
                 sql('SELECT * FROM iot.telemetry;', 'example_grafana')
+
+            # Keep aliases crossing categories and NULL labels/values: filtering a
+            # display label after combining its sensors would change these means.
+            sql("""CREATE OR REPLACE VIEW iot.home_server_temperature_samples WITH(security_barrier=true) AS SELECT * FROM(VALUES
+ (TIMESTAMPTZ '2026-11-07T00:01:00Z','host-a'::text,'Example host'::text,'cpu_temperature_c'::text,'CPU'::text,10::double precision),
+ ('2026-11-07T00:02:00Z','host-a','Example host','cpu_temperature_c','CPU',NULL),
+ ('2026-11-07T00:03:00Z','host-b','Example host','cpu_temperature_c','CPU',20),
+ ('2026-11-07T00:04:00Z','host-b','Example host','package_temperature_c','CPU',30),
+ ('2026-11-07T00:01:00Z','host-c',NULL,'cpu_temperature_c','CPU',7),
+ ('2026-11-07T00:01:00Z','host-a','Example host','unmapped',NULL,9),
+ ('2026-11-07T00:02:00Z','host-a','Example host','unmapped-null',NULL,NULL),
+ ('2026-11-07T00:03:00Z','host-a','Example host','core_0','core 0',32),
+ ('2026-11-07T00:04:00Z','host-a','Example host','memory_temperature_c',NULL,NULL),
+ ('2026-11-07T00:04:00Z','host-a','Example host','mainboard_temperature_c',NULL,40),
+ ('2026-11-07T00:03:00Z','host-a','Example host','disk_temperature_c',NULL,44),
+ ('2026-11-07T00:02:00Z','host-a','Example host','gpu_temperature_c',NULL,0)
+)v(read_time_utc,device_id,device_name,sensor_id,sensor_name,temperature_c);""")
+            snapshot, dashboard = fixture()
+            category = "(${temperature_category:sqlstring} = 'everything' OR CASE WHEN sensor_id IN ('cpu_temperature_c','synthetic') OR sensor_id ~ '^core_[0-9]+$' THEN 'cpu' WHEN sensor_id='package_temperature_c' OR sensor_id ~ '^(mainboard|memory)_' THEN 'board-memory' WHEN sensor_id='disk_temperature_c' THEN 'storage' WHEN sensor_id='gpu_temperature_c' THEN 'gpu' ELSE 'other' END = ${temperature_category:sqlstring})"
+            target = dashboard['panels'][0]['targets'][0]
+            old_category = query.dashboard_template(dashboard)[1]
+            target['rawSql'] = target['rawSql'].replace(old_category, category)
+            template = verified_render(snapshot, dashboard, 300, start, start + timedelta(hours=1))
+            # Benchmark generation selects all; inject each selector identically
+            # in the original predicate and the candidate's three predicate sites.
+            all_category = category.replace('${temperature_category:sqlstring}', "'everything'")
+            union = ' UNION ALL '.join('SELECT read_time_utc,device_name,sensor_name,sensor_id,temperature_c FROM iot.' + name for name in query.VIEWS)
+            for selected in ('everything', 'cpu', 'board-memory', 'storage', 'gpu', 'other', 'absent', None):
+                predicate = category.replace('${temperature_category:sqlstring}', query.quote(selected))
+                candidate = template.replace(all_category, predicate).rstrip().rstrip(';')
+                self.assertEqual(candidate.count(predicate), 3)
+                reference = "SELECT to_timestamp((floor(extract(epoch FROM read_time_utc)/300)*300)::double precision) AS time,device_name || ' / ' || sensor_name AS metric,avg(temperature_c) AS value FROM(" + union + ")s WHERE read_time_utc BETWEEN TIMESTAMPTZ '" + start.isoformat() + "' AND TIMESTAMPTZ '" + (start + timedelta(hours=1)).isoformat() + "' AND " + predicate + ' GROUP BY 1,2 ORDER BY 1,2'
+                old, new = values(reference), values(candidate)
+                self.assertEqual(old, new, selected)
+                if selected == 'everything':
+                    self.assertTrue(any(row['metric'] == 'Example host / CPU' and row['value'] == 20 for row in new))
+                elif selected == 'cpu':
+                    self.assertTrue(any(row['metric'] == 'Example host / CPU' and row['value'] == 15 for row in new))
+                    self.assertTrue(any(row['metric'] is None and row['value'] == 7 for row in new))
+                elif selected == 'board-memory':
+                    self.assertTrue(any(row['metric'] == 'Example host / CPU' and row['value'] == 30 for row in new))
+                elif selected == 'gpu':
+                    self.assertEqual(new[0]['value'], 0)
+                elif selected in ('absent', None):
+                    self.assertEqual(new, [])
         finally:
             if container:
                 state = json.loads(docker('inspect', container))[0]

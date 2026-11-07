@@ -186,11 +186,11 @@ def render(snapshot, dashboard, interval_seconds=None, start=None, end=None, det
             + 'FROM iot.' + name + '\nWHERE ' + time_filter + '\nGROUP BY 1,2,3,4\n)')
         metric = 'device_name || ' + delimiter + ' || (' + sensor_name + ')'
         if index == 0:
-            # DISTINCT must precede CASE evaluation; labels belong to source identities, not every time bucket.
+            # Label and category expressions depend on identities, not every time bucket.
             lookup = ['temperature_label_keys_0 AS MATERIALIZED (\nSELECT DISTINCT device_id,device_name,sensor_id FROM ' + alias + '\n)',
-                      'temperature_label_lookup_0 AS MATERIALIZED (\nSELECT device_id,device_name,sensor_id,(' + metric + ') COLLATE "default" AS metric\nFROM temperature_label_keys_0\n)']
+                      'temperature_label_lookup_0 AS MATERIALIZED (\nSELECT device_id,device_name,sensor_id,(' + metric + ') COLLATE "default" AS metric\nFROM temperature_label_keys_0\nWHERE ' + category + '\n)']
             labeled.append('SELECT bucket,l.metric,temperature_sum,temperature_count\nFROM ' + alias
-                           + ' b JOIN temperature_label_lookup_0 l USING(device_id,sensor_id)\nWHERE b.device_name IS NOT DISTINCT FROM l.device_name AND (' + category + ')')
+                           + ' b JOIN temperature_label_lookup_0 l USING(device_id,sensor_id)\nWHERE b.device_name IS NOT DISTINCT FROM l.device_name')
         else:
             labeled.append('SELECT bucket,' + metric + ' AS metric,temperature_sum,temperature_count\nFROM ' + alias + '\nWHERE ' + category)
     output_time = 'bucket AS "time"' if interval_seconds is not None else '$__timeGroupAlias(bucket,$__interval,NULL)'
