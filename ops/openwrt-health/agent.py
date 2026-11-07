@@ -25,6 +25,7 @@ if VENDOR.is_dir():
 
 from health_core import (ActionLedger, CONDITIONS, Decisions, MIB, Sampler,
                          atomic_json, encode, memory_top_process, read_small, utc, valid_uuid, validate_diagnostics, validate_metrics)
+from presence import Presence
 
 
 def private_file(path, maximum=65536):
@@ -447,27 +448,99 @@ class Publisher:
     def __init__(self, cfg, client_factory=None):
         if client_factory is None:
             import paho.mqtt.client as mqtt
-            client_factory = lambda: mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=cfg['mqtt']['client_id'], protocol=mqtt.MQTTv5)
-        self.cfg, self.client = cfg, client_factory()
+            client_factory = lambda: mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=cfg['mqtt']['client_id'], protocol=mqtt.MQTTv5, reconnect_on_failure=False)
+        self.cfg, self.client_factory = cfg, client_factory
+        self.presence = Presence(cfg['site_id'], cfg['host_id'], cfg['host_id'], cfg['mqtt']['client_id'])
+        self.presence_topic = 'iot/v1/' + cfg['site_id'] + '/' + cfg['host_id'] + '/status'
+        self.presence_birth_pending, self.presence_generation, self.last_presence_at = False, 0, 0
+        self.presence_retry_at = 0
+        self.presence_pending = None
+        self.presence_lock = threading.Lock()
         self.acks, self.connected, self.pending = {}, threading.Event(), None
+        self.reconnect_requested = threading.Event()
+        self.reconnect_at, self.closing = 0, False
+        self.start_client()
+
+    def start_client(self):
+        cfg = self.cfg
+        self.client = self.client_factory()
         self.client.max_inflight_messages_set(1)
         self.client.max_queued_messages_set(2)
         self.client.reconnect_delay_set(min_delay=5, max_delay=60)
         self.client.on_connect = self.on_connect
-        self.client.on_disconnect = lambda *args: self.connected.clear()
+        self.client.on_disconnect = self.on_disconnect
+        self.client.on_connect_fail = lambda *args: self.reconnect_requested.set()
         self.client.on_publish = self.on_publish
+        self.client.on_pre_connect = self.prepare_presence
+        self.prepare_presence(self.client, None)
         password = private_file(cfg['mqtt']['password_file'], 4096).rstrip('\r\n')
         if not password or '\x00' in password:
             raise ValueError('INVALID_MQTT_PASSWORD')
         self.client.username_pw_set(cfg['mqtt']['username'], password)
         self.client.tls_set_context(ssl.create_default_context())
         url = urlparse(cfg['mqtt']['url'])
-        self.client.connect_async(url.hostname, url.port or 8883, keepalive=30)
+        self.client.connect_async(url.hostname, url.port or 8883, keepalive=30, **({'clean_start': False} if self.presence_generation else {}))
         self.client.loop_start()
+
+    def on_disconnect(self, *args):
+        self.connected.clear()
+        self.reconnect_requested.set()
+
+    def ensure_connection(self):
+        if self.closing or not self.reconnect_requested.is_set() or time.monotonic() < self.reconnect_at:
+            return
+        self.client.loop_stop()
+        sock = self.client.socket()
+        if sock is not None:
+            sock.close()
+        self.reconnect_requested.clear()
+        self.reconnect_at = time.monotonic() + 5
+        self.pending, self.presence_pending = None, None
+        self.acks.clear()
+        self.start_client()
+
+    def prepare_presence(self, client, userdata):
+        with self.presence_lock:
+            self.presence_pending = None
+            self.presence_retry_at = 0
+            client.will_set(self.presence_topic, encode(self.presence.begin()), qos=1, retain=True)
 
     def on_connect(self, client, userdata, flags, reason_code, properties):
         if reason_code == 0:
+            self.presence_generation += 1
+            self.presence_birth_pending = True
             self.connected.set()
+        else:
+            self.reconnect_requested.set()
+
+    def tick_presence(self, progress=True):
+        if not self.connected.is_set() or not self.presence_birth_pending and not progress:
+            return False
+        if self.presence_pending is None:
+            if not self.presence_birth_pending and time.monotonic() - self.last_presence_at < 60:
+                return False
+            if time.monotonic() < self.presence_retry_at:
+                return False
+            event = 'online' if self.presence_birth_pending else 'heartbeat'
+            value = self.presence.message(event, True, 'connected' if event == 'online' else 'heartbeat')
+            self.presence_retry_at = time.monotonic() + 60
+            info = self.client.publish(self.presence_topic, encode(value), qos=1, retain=True)
+            if info.rc != 0:
+                return False
+            self.presence_pending = self.presence_generation, info
+        generation, info = self.presence_pending
+        try:
+            info.wait_for_publish(timeout=3)
+            if not info.is_published():
+                return False
+            success = self.acks.pop(info.mid, False)
+            self.presence_pending = None
+            if success and generation == self.presence_generation:
+                self.presence_birth_pending, self.last_presence_at = False, time.monotonic()
+                self.presence_retry_at = 0
+            return success
+        except (RuntimeError, ValueError):
+            return False
 
     def on_publish(self, client, userdata, mid, reason_code, properties):
         self.acks[mid] = not reason_code.is_failure
@@ -503,7 +576,22 @@ class Publisher:
             return False
 
     def close(self):
-        self.client.disconnect()
+        self.closing = True
+        acknowledged = False
+        if self.connected.is_set():
+            try:
+                info = self.client.publish(self.presence_topic, encode(self.presence.message('offline', False, 'shutdown')), qos=1, retain=True)
+                if info.rc == 0:
+                    info.wait_for_publish(timeout=3)
+                    acknowledged = info.is_published() and self.acks.pop(info.mid, False)
+            except (RuntimeError, ValueError):
+                pass
+        if acknowledged:
+            self.client.disconnect()
+        else:
+            sock = self.client.socket()
+            if sock is not None:
+                sock.close()
         self.client.loop_stop()
 
 
@@ -512,6 +600,10 @@ def publish_loop(cfg, stop):
     try:
         while not stop.is_set():
             try:
+                publisher.ensure_connection()
+                status = Path(cfg['state_directory']) / 'agent-status.json'
+                progress = status.exists() and 0 <= time.time() - status.stat().st_mtime <= 120
+                publisher.tick_presence(progress)
                 for path, raw in queue.records(time.time()):
                     if not publisher.send(raw):
                         break

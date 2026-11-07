@@ -20,7 +20,7 @@ if [ -e "$target" ] || [ -e "$conf" ] || [ -e "$unit" ]; then
 fi
 install -d -m 755 "$target"
 install -d -m 700 "$conf"
-install -m 644 "$src/agent.py" "$src/read-temperatures.sh" "$target/"
+install -m 644 "$src/agent.py" "$src/presence.py" "$src/read-temperatures.sh" "$target/"
 install -m 600 "$1" "$conf/config.json"
 install -m 600 "$2" "$conf/mqtt_password"
 install -m 644 "$src/one-minihouse-temperature.service" "$unit"

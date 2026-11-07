@@ -1,5 +1,11 @@
 # oneMiniHouse gateway
 
+网关沿用 `<topicPrefix>/status` 作为逻辑采集依赖，复用现有连接，每分钟发布 schema v1 presence，并保留原质量、设备摘要和队列计数。CONNECT 前轮换连接实例与 retained QoS 1 遗嘱，正常退出先报告离线；该逻辑进程不应仅因有状态主题就被列为一台物理设备。
+
+断线时仅通过 MQTT.js 公开 API 清除未确认的在线状态包，重连不补发旧心跳；遥测 SDK 在途项与持久队列保持原有行为。
+
+实际设备读取结果发布到 `<topicPrefix>/devices/<deviceId>/status`：直接读取成功表示可读，连续三次失败表示不可读，米家网关缓存无论读取成功或失败都保持未知。状态消息不进入遥测 outbox，断网后只发送新观察；接收端按网关依赖将上游失联期间的子设备标成未知。
+
 Node.js 24 / TypeScript / pnpm 采集服务，支持 YM-S1-BES 蓝牙插座、DDSU666 Modbus 电表、B-RS-L30 光照、米家 Zigbee 温湿度及 Linux 主机温度。MQTT 5 / TLS / QoS 1 上报，SQLite 保存断网队列。只实现已确认的读取命令，不实现开关、清零或写参数。
 
 ## 配置与启动

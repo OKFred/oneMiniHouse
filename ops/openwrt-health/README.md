@@ -1,5 +1,9 @@
 # OpenWrt 主机告警与有限缓解
 
+发布实例复用现有 MQTT 连接，在 `iot/v1/<site_id>/<host_id>/status` 发布 retained QoS 1 presence。标准身份为 `gateway_id=host_id`、`device_id=host_id`、`reporter_id=mqtt.client_id`；不改变原 `/host-health` 遥测。连接成功报告在线，此后每分钟发送 live 心跳；采样进程的进度文件超过 120 秒未更新时停止新心跳，不从旧资源队列生成在线状态。
+
+异常断连使用每连接独立的 LWT，源时间、uptime 和序号均为 null；断线后停止旧循环再重建同 client ID 的单个客户端，旧 SDK 在线消息不补发，原遥测队列保留。正常停止等待至多三秒且检查成功 PUBACK；缺失或拒绝时关闭 socket 保留 LWT，不发送 DISCONNECT。新源码包含 `presence.py`，需与 `agent.py` 一起安装。状态持久化和父链路未知判定由入库端处理，MQTT 保留消息本身不是历史库。
+
 Python 3.10+ 原生 procd 服务，两个实例分别负责本机采样和 MQTT 发布；不新增 Docker 容器，不由远端 SSH 采集。每 10 秒读取内核资源，每 60 秒发布，条件或动作事件改变时立即排队。Docker、容量和证据操作使用独立有期限 worker；超时后仍存活的 worker（包括 D 状态）阻止同类替代进程启动。
 
 ## 采集与判定

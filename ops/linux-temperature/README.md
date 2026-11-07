@@ -1,5 +1,11 @@
 # Linux 本机温度 MQTT 上报
 
+同一 MQTT 连接的 `iot/v1/<site_id>/<gateway_id>/status` 现在携带 schema v1 presence，保留 `quality`、`read_time_utc`、`pending` 和 `dropped` 兼容字段。连接成功立即报告在线，主采集循环至少每 60 秒触发一次心跳；温度缺失仍可在线。正常退出报告 `shutdown`，异常断连由 retained QoS 1 LWT 报告 `lwt`，后者没有虚构的源发生时间。
+
+presence 不进入遥测 outbox。每次 CONNECT 生成新的连接实例，运行实例在进程生命周期内稳定；断线后停止旧网络循环再重建同 client ID 的单个 Paho 客户端，丢弃 SDK 中未确认的旧在线消息，遥测仍由原持久队列补发。正常退出只有离线 PUBACK 成功才发送 DISCONNECT，否则直接关闭 socket 保留 LWT。源码部署必须一并安装 `presence.py`，Docker 构建已加入显式允许清单。
+
+`test_presence_mqtt.py` 是可选真实 Broker 回归：在 Linux/root 的隔离匿名测试 Broker 上设置 `MQTT_PRESENCE_TEST=1`、测试主机/端口后运行，覆盖实际 Paho 断线、丢 PUBACK、拒绝 PUBACK、正常退出和持久遥测；禁止指向生产 Broker。
+
 每台 Linux 主机自己读取 sysfs，通过 MQTT 5 + TLS + QoS 1 上报；采集服务器订阅并沿用现有原始层、双 PostgreSQL 和 Grafana 链路。MQTT 代理无需 SSH 采集账号、SSH 密钥、sudo、Docker 或入站服务。可选的 SATA SMART 和 NVIDIA GPU 温度由独立 helper 读取固定白名单设备，代理只消费其缓存。
 
 需要镜像部署及集中管理配置、凭据和采集队列时，参见 [Docker 部署与迁移](DOCKER.md)。

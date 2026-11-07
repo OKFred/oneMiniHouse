@@ -7,6 +7,7 @@ import { collectionGroups, runSchedule } from './scheduler.ts';
 import { drivers } from './runner.ts';
 import { Outbox, flush } from './outbox.ts';
 import { MqttTransport } from './mqtt.ts';
+import { encodePresence } from './presence.ts';
 import { FrameStore, FrameStorageError, frameEnvelope } from './frames.ts';
 
 const config = loadConfig();
@@ -19,12 +20,11 @@ const abort = new AbortController();
 const stop = () => abort.abort();
 process.once('SIGINT', stop); process.once('SIGTERM', stop);
 const envelope = (deviceId?: string) => ({ schema_version: 1, message_id: randomUUID(), site_id: config.siteId, gateway_id: config.gatewayId, ...(deviceId ? { device_id: deviceId } : {}) });
-const offline = JSON.stringify({ ...envelope(), online: false, quality: 'offline', reason: 'connection_lost', captured_at: null });
-const transport = new MqttTransport(config, offline);
+const transport = new MqttTransport(config);
 const groups = collectionGroups(config.devices), groupProgress = groups.map(() => Date.now());
-let mqttError = '', statusDue = 0;
+let mqttError = '', statusDue = 0, presenceBirth = true;
 const deviceHealth: Record<string, string> = Object.fromEntries(config.devices.map(d => [d.id, 'pending']));
-transport.client.on('connect', () => { mqttError = ''; statusDue = 0; box.replayStates(); log('mqtt_connected'); });
+transport.client.on('connect', () => { mqttError = ''; statusDue = 0; presenceBirth = true; box.replayStates(); log('mqtt_connected'); });
 transport.client.on('offline', () => log('mqtt_offline'));
 transport.client.on('error', e => { mqttError = e.message; log('mqtt_error', { error: e.message }); });
 const status = (online = true) => ({ ...envelope(), captured_at: new Date().toISOString(), online,
@@ -47,7 +47,13 @@ async function mqttLoop() {
     if (Date.now() >= nextFramePrune) { frames.prune(); nextFramePrune = Date.now() + 60000; }
     if (transport.connected) {
       try {
-        if (Date.now() >= statusDue) { await transport.publish(`${config.mqtt.topicPrefix}/status`, JSON.stringify(status()), true); statusDue = Date.now() + 30000; }
+        if (Date.now() >= statusDue) {
+          const value = transport.presence.message(presenceBirth ? 'online' : 'heartbeat', true, presenceBirth ? 'connected' : 'heartbeat');
+          // A denied status topic must not starve the durable telemetry queue.
+          statusDue = Date.now() + 60000;
+          await transport.publish(`${config.mqtt.topicPrefix}/status`, encodePresence({ ...status(), ...value, message_id: value.event_id }), true);
+          presenceBirth = false;
+        }
         await flush(box, transport.publish);
         await frames.flush(transport.publish);
       } catch (e) { log('mqtt_publish_failed', { error: String(e), ...box.stats() }); }
@@ -70,6 +76,11 @@ async function collect(device: DeviceConfig) {
     deviceHealth[device.id] = 'error';
     const state = { ...envelope(device.id), collection_id: collectionId, captured_at: new Date().toISOString(), quality: 'error', error };
     box.state(device.id, state.message_id, `${base}/state`, JSON.stringify(state));
+    const observation = transport.presence.observation(device.id, device.driver === 'xiaomi-gateway-v3-temperature' ? null : false);
+    if (observation && transport.connected) {
+      try { await transport.publish(`${base}/status`, encodePresence(observation), true); }
+      catch { /* A failed live observation is never replayed from the telemetry outbox. */ }
+    }
     log('sample_failed', { device_id: device.id, error });
   }
   // Disk/queue failures must fail the process, never be mistaken for BLE failures.
@@ -80,9 +91,14 @@ async function collect(device: DeviceConfig) {
       quality: 'ok', metrics: row.metrics, source: row.source };
     box.save({ id: sample.message_id, topic: `${base}/telemetry`, payload: JSON.stringify(sample), captured_ms: Date.parse(row.utc) }, device.id, `${base}/state`);
     deviceHealth[device.id] = 'ok';
+    const cached = row.source.observation_kind === 'gateway_cached_state';
+    const observation = transport.presence.observation(device.id, cached ? null : true, row.utc);
+    if (observation && transport.connected) {
+      try { await transport.publish(`${base}/status`, encodePresence(observation), true); }
+      catch { /* The next direct read supplies a new observation. */ }
+    }
     log('sample_saved', { ...sample, ...box.stats() });
   }
-  statusDue = 0;
 }
 
 log('gateway_started', { site_id: config.siteId, gateway_id: config.gatewayId, adapter: config.adapter, devices: config.devices.map(d => d.id), ...box.stats() });
@@ -91,7 +107,10 @@ const loops = [...groups.map((devices, index) => runSchedule(devices, collect, (
 await Promise.all(loops);
 clearInterval(heartbeat);
 if (transport.connected) {
-  try { await transport.publish(`${config.mqtt.topicPrefix}/status`, JSON.stringify(status(false)), true); } catch { /* LWT covers loss. */ }
+  try {
+    const value = transport.presence.message('offline', false, 'shutdown');
+    await transport.publish(`${config.mqtt.topicPrefix}/status`, encodePresence({ ...status(false), ...value, message_id: value.event_id }), true);
+  } catch { /* LWT covers loss. */ }
 }
 await transport.close();
 box.close();
