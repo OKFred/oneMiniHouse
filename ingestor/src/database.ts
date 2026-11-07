@@ -5,9 +5,12 @@ import { canonical,hash,parseJson,observationTimes,PROCESSOR_ID,PROCESSOR_VERSIO
 import { ConflictError,type DeliveryOutcome,type Queue,type Target } from './queue.ts';
 import { XIAOMI_QUALITY_PROCESSOR_ID } from './xiaomi-quality.ts';
 import { projectMetricsForPostgres, type PostgresMetricProjection } from './pg-metric-projection.ts';
+import { isPresenceRow,presenceEvent } from './presence.ts';
+import { writePresenceBatch } from './presence-database.ts';
 
 export interface BatchWriteOutcome { confirmed:string[];expired:string[] }
 export function retentionTime(row:RecordRow):number {
+  if(isPresenceRow(row))return Date.parse(presenceEvent(row).observed_time_utc);
   const v=parseJson(row.payload) as Sample;
   const times=observationTimes(v);
   const value=times.sample_time_utc??times.read_time_utc??v.source_receive_time_utc??row.received_at;
@@ -67,6 +70,7 @@ export class PostgresSink {
   }
   async write(row:RecordRow):Promise<DeliveryOutcome> {
     if(this.partitionForRetention([row]).expired.length)return 'expired';
+    if(isPresenceRow(row)){await writePresenceBatch(this.pool,[row]);return 'confirmed';}
     const projection=postgresProjection(row);
     // No raw payload in new PG rows. Legacy payload/hash are retained in place by the migration.
     const result=await this.pool.query(`INSERT INTO iot.telemetry (${columns})
@@ -82,6 +86,12 @@ export class PostgresSink {
   async writeBatch(input:RecordRow[]):Promise<BatchWriteOutcome> {
     const {eligible:rows,expired}=this.partitionForRetention(input);
     if(!rows.length)return {confirmed:[],expired};
+    const presence=rows.filter(isPresenceRow);
+    if(presence.length){
+      const confirmed=await writePresenceBatch(this.pool,presence);
+      const rest=await this.writeBatch(rows.filter(row=>!isPresenceRow(row)));
+      return {confirmed:[...confirmed,...rest.confirmed],expired:[...expired,...rest.expired]};
+    }
     if(rows.length===1){const outcome=await this.write(rows[0]);return outcome==='expired'?{confirmed:[],expired:[...expired,rows[0].id]}:{confirmed:[rows[0].id],expired};}
     const values:unknown[]=[],expected=new Map<string,{row:RecordRow;projection:PostgresMetricProjection}>();
     const tuples=rows.map(row=>{

@@ -14,7 +14,8 @@ try {
   const timeMigration=exists.rows[0].present && (await client.query("SELECT 1 FROM information_schema.columns WHERE table_schema='iot' AND table_name='telemetry' AND column_name='read_time_utc'")).rowCount;
   if(!timeMigration)files.push('002-layered-storage.sql','003-derived-views.sql','004-chinese-comments.sql');
   files.push('005-observation-times.sql','006-grafana-compat-permissions.sql');
-  if (files.includes('003-derived-views.sql')) {
+  if(config.presence)files.push('007-device-presence.sql');
+  if (files.includes('003-derived-views.sql')||config.presence) {
     const role = process.env.MIGRATION_INGESTOR_ROLE?.trim();
     if (!role) throw new Error('MIGRATION_INGESTOR_ROLE must name the runtime role, not the migration owner');
     await client.query("SELECT set_config('one_min_house.ingestor_role', $1, false)", [role]);

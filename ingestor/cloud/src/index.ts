@@ -64,7 +64,7 @@ export function classifyD1Failure(error: unknown, now = Date.now()): { code: str
 }
 
 export function validateRaw(value: unknown, allowedSite: string, now = Date.now()): RawRecord {
-  if (!object(value) || !text(value.raw_id) || !uuid.test(value.raw_id) || !['mqtt', 'legacy_d1', 'legacy_inbox'].includes(String(value.source_kind)) || !text(value.source_id, 2048) || !text(value.topic, 2048)) throw new Error('Invalid raw identity');
+  if (!object(value) || !text(value.raw_id) || !uuid.test(value.raw_id) || !['mqtt', 'mqtt_presence', 'presence_observer', 'legacy_d1', 'legacy_inbox'].includes(String(value.source_kind)) || !text(value.source_id, 2048) || !text(value.topic, 2048)) throw new Error('Invalid raw identity');
   if (value.topic.endsWith('/frames') || value.topic.includes('/frames/')) throw new Error('Protocol frames are not accepted by the business archive');
   if (!['inline', 'object_ref'].includes(String(value.data_kind)) || !text(value.content_type, 128) || typeof value.raw_data !== 'string' || Buffer.byteLength(value.raw_data) > 65536) throw new Error('Invalid raw content');
   if (value.raw_data_sha256 !== digest(value.raw_data).toString('hex')) throw new Error('Raw content hash mismatch');
@@ -74,6 +74,10 @@ export function validateRaw(value: unknown, allowedSite: string, now = Date.now(
   // belong to this site, preventing a compromised token from writing another site.
   if (value.source_site_id !== null && value.source_site_id !== allowedSite) throw new Error('Site is not allowed');
   if (value.source_kind === 'mqtt' && !value.topic.startsWith(`iot/v1/${allowedSite}/`)) throw new Error('Topic is not allowed');
+  // Legacy presence topics are not always under iot/v1; the frozen source must still name this site explicitly.
+  if (value.source_kind === 'mqtt_presence' && value.source_site_id !== allowedSite) throw new Error('Presence site is not allowed');
+  if (value.source_kind === 'presence_observer' && (value.source_site_id !== allowedSite
+    || !value.topic.startsWith(`iot/v1/${allowedSite}/_presence-observer/`))) throw new Error('Observer site is not allowed');
   return value as unknown as RawRecord;
 }
 

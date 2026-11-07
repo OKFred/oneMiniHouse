@@ -10,6 +10,7 @@ import { parseJson, type Sample } from './message.ts';
 import { CpuCoreAlerts, validateFeishuWebhook } from './cpu-core-alert.ts';
 import { BusinessHealth } from './business-health.ts';
 import { deliveryRetryDelay } from './delivery-retry.ts';
+import { observerRaw, PRESENCE_OBSERVER_PROCESSOR_ID } from './presence.ts';
 
 const config=loadConfig(),dir=process.env.DATA_DIR??'/app/data';
 mkdirSync(dir,{recursive:true});
@@ -32,17 +33,22 @@ const mqttConnections=new MqttConnections(config,secret(config.mqtt.passwordFile
     observeConnectionMessage(businessHealth,result,packet,config,plan);
     // Both commits finish before this connection releases PUBACK. Raw samples
     // and idempotent alert state are shared by every MQTT connection.
-    if(cpuAlerts&&!plan.hostHealthInput&&result!=='rejected'&&packet.topic.endsWith('/telemetry'))cpuAlerts.observe(parseJson(bytes.toString('utf8')) as Sample);
+    if(cpuAlerts&&!plan.hostHealthInput&&!plan.presenceDevices&&result!=='rejected'&&packet.topic.endsWith('/telemetry'))cpuAlerts.observe(parseJson(bytes.toString('utf8')) as Sample);
     log('message_'+result,{client_id:plan.clientId,topic:packet.topic});
   }catch(e){
     log('intake_paused',{client_id:plan.clientId,reason:e instanceof CapacityError?'QUEUE_FULL':'STORAGE_ERROR',...queue.stats()});
     throw e;
   }
-},log);
+},log,{coverage:(plan,event,sequence,now)=>{
+  for(const site of new Set(plan.presenceDevices!.map(device=>device.siteId))){
+    queue.acceptRaw(observerRaw(site,plan.clientId,plan.presenceSessionId!,sequence,event,now,queue.options.rawRetentionDays),PRESENCE_OBSERVER_PROCESSOR_ID,'1');
+  }
+}});
 const sinks=config.targets.map(t=>({target:t.id,sink:new PostgresSink(t)}));
 let lastCleanup=0;
 const heartbeat=setInterval(()=>{
   try{
+    mqttConnections.pulsePresenceCoverage();
     const stats=queue.stats(),cpuAlertStats=cpuAlerts?.stats(),mqttHealth=mqttConnections.snapshot();
     const state={heartbeat_time_utc:new Date().toISOString(),...mqttHealth,
       quality:mqttHealth.subscribed&&!mqttHealth.intake_paused&&!stats.delivery_failed&&!stats.processing_failed&&!Object.values(targetHealth).some(h=>h.error)&&!cpuAlertStats?.notification_error?'ok':'degraded',

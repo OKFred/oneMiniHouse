@@ -3,6 +3,7 @@ import { isAbsolute } from 'node:path';
 import { validateCollectdInput, type CollectdTemperatureInput } from './collectd.ts';
 import { validateCpuCoreAlertConfig, type CpuCoreAlertConfig } from './cpu-core-alert.ts';
 import { validateHostHealthInput, type HostHealthInput } from './host-health.ts';
+import { validatePresenceConfig, type PresenceConfig, type PresenceDevice } from './presence.ts';
 
 export interface TargetConfig {
   id: 'local' | 'supabase'; host: string; port: number; database: string; user: string;
@@ -15,10 +16,12 @@ export interface HostHealthMqttInput extends HostHealthInput {
 export interface MqttConnectionPlan {
   clientId: string; primary: boolean; topicPrefixes: string[]; subscriptions: string[]; unsubscriptions: string[];
   hostHealthInput?: HostHealthMqttInput;
+  presenceDevices?: PresenceDevice[]; presenceSessionId?: string; presenceAvailable?: boolean;
 }
 export interface Config {
   collectdTemperatures?: CollectdTemperatureInput[];
   hostHealthInputs?: HostHealthMqttInput[];
+  presence?: PresenceConfig;
   cpuCoreAlerts?: CpuCoreAlertConfig & { webhookFile: string };
   mqtt: { url: string; clientId: string; username: string; passwordFile: string; topicPrefixes: string[]; frameTopicPrefixes?: string[]; telemetryClients?: TelemetryClientConfig[]; sessionExpirySeconds: number };
   queue: { maxPending: number; maxRejected: number; rawRetentionDays?: number; frameRetentionDays?: number; maxProtocolFrames?: number };
@@ -87,6 +90,11 @@ export function validateConfig(raw: unknown): Config {
       clients.add(value.clientId); topics.add(value.topic); identities.add(identity);
     }
   }
+  if (raw.presence !== undefined) {
+    const base=raw as unknown as Config;
+    validatePresenceConfig(raw.presence,[m.clientId as string,...(base.mqtt.telemetryClients??[]).map(c=>c.clientId),...(base.hostHealthInputs??[]).map(c=>c.clientId)],
+      [...mqttSubscriptions(base),...(base.hostHealthInputs??[]).map(c=>c.topic)]);
+  }
   if (mqttConnectionPlans(raw as unknown as Config).some(client => client.subscriptions.length > 10)) throw new Error('Each MQTT connection supports at most 10 subscriptions; assign telemetryClients or explicit frameTopicPrefixes');
   for (const [key, max] of [['rawRetentionDays', 3650], ['frameRetentionDays', 365], ['maxProtocolFrames', 10000000]] as const) {
     if (raw.queue[key] !== undefined && !int(raw.queue[key], 1, max)) throw new Error('Invalid retention limit');
@@ -145,6 +153,9 @@ export function mqttConnectionPlans(config: Config): MqttConnectionPlan[] {
   })), ...(config.hostHealthInputs ?? []).map(input => ({
     clientId: input.clientId, primary: false, topicPrefixes: [],
     subscriptions: [input.topic], unsubscriptions: [], hostHealthInput: input,
+  })), ...(config.presence?.clients ?? []).map(client=>({
+    clientId:client.clientId,primary:false,topicPrefixes:[],subscriptions:client.topics,unsubscriptions:[],
+    presenceDevices:config.presence!.devices.filter(device=>client.topics.includes(device.topic)),
   }))];
 }
 export function secret(path: string): string {
